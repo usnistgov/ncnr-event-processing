@@ -1,0 +1,8 @@
+#dateutil
+fastapi
+h5py
+msgpack
+numpy
+#pydantic
+#pydantic_numpy # deprecated but still required
+requests

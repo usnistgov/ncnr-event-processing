@@ -20,7 +20,7 @@ def eventfiles_from_nexus(nexusfile): #, events_folder=EVENTS_FOLDER):
                 files.add(group['event_file_name'][0].decode())
     return instrument, files
 
-EVENTS_FOLDER = "event_files"
+EVENTS_FOLDER = "cache/event_files"
 EVENTS_ENDPOINT = "http://nicedata.ncnr.nist.gov/eventfiles"
 
 
@@ -50,11 +50,12 @@ def retrieve_events(nexus_path, events_folder=EVENTS_FOLDER, overwrite=False):
     return paths
 
 
-NEXUS_FOLDER = Path("nexus_files").absolute()
+NEXUS_FOLDER = Path("cache/nexus_files").absolute()
 METADATA_ENDPOINT = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
 NCNRDATA_ENDPOINT = "https://ncnr.nist.gov/pub/ncnrdata/"
+#NCNRDATA_ENDPOINT = "https://charlotte.ncnr.nist.gov/pub/ncnrdata/"
 
-def nexus_url(nexusfile):
+def nexus_lookup(nexusfile):
     """Lookup the download path for a nexus file given its name"""
     # Need cycle and experiment ID to retrieve nexus file.
     url = METADATA_ENDPOINT + "/datafiles"
@@ -62,8 +63,15 @@ def nexus_url(nexusfile):
     r = requests.get(url, params={"filename": nexusfile})
     if not r.ok:
         raise RuntimeError(f"Nexus lookup <{url}?filename={nexusfile}> failed.")
-    location = r.json()[0]["localdir"]
-    nexus_url = NCNRDATA_ENDPOINT + location + "/" + nexusfile
+    reply = r.json()
+    if len(reply) > 1:
+        raise RuntimeError(f"Nexus lookup <{nexusfile}> is not unique.")
+    location = reply[0]["localdir"]
+    #print("at", location)
+    return location
+
+def nexus_url(datapath, nexusfile):
+    nexus_url = NCNRDATA_ENDPOINT + datapath + "/" + nexusfile
     return nexus_url
 
 def cache_url(url, cachedir, filename=None):
@@ -86,7 +94,8 @@ def main():
     import sys
     filenames = ["sans69040.nxs.ngv"] if len(sys.argv) == 1 else sys.argv[1:]
     for filename in filenames:
-        nexus_path = cache_url(nexus_url(filename), NEXUS_FOLDER, filename)
+        datapath = nexus_lookup(filename)
+        nexus_path = cache_url(nexus_url(datapath, filename), NEXUS_FOLDER, filename)
         paths = retrieve_events(nexus_path)
     #print(paths)
 

@@ -9,7 +9,10 @@ from msgpack import packb
 from models import VSANS, RebinUniformCount, RebinUniformWidth, NumpyArray, RebinnedData, InstrumentName
 
 import numpy as np
-from pydantic import BaseModel
+import h5py
+
+# TODO: make into a package with relative imports
+import models, data_cache, iso8601
 
 app = FastAPI()
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -37,3 +40,53 @@ def rebin(
     return Response(content=packb(response_data), media_type="application/msgpack")
 
 # Not yet implemented....
+@app.post("/metadata")
+def metadata(request):
+    from dateutil.parser import isoparser
+
+    point = request.point
+    nexus = lookup_nexus(request)
+    # TODO: what if there are multiple entries?
+    entry = list(nexus.values())[0]
+    timestamp = entry['start_time'][()][0].decode('ascii')
+    duration = entry['control/count_time'][()][point]
+    # TODO: find active detectors
+    detectors = [f"detector_{k}" for k in 'B FB FL FR FT MB ML MR MT'.split()]
+    # TODO: determine mode for sweep device and triggers
+    event_mode = 'relaxation' # not written yet... this is the default
+    # TODO: lookup sweep controls from nexus file
+    reply = models.MetadataReply(
+        request=request,
+        numpoints=1,
+        timestamp=isoparser().isoparse(timestamp),
+        duration=duration,
+        trigger_interval=0.0,
+        detectors=detectors,
+        logs={}, # No temperature logs in initial dataset
+        event_mode=event_mode,
+        sweep=None,
+    )
+    return reply
+
+def lookup_nexus(request):
+
+    # TODO: mtime on remote file for invalidating cache?
+    # TODO: nexus filename collisions?
+    # Neither of these are an issue for vsans so ignore for now.
+    print("request", request, request.path, request.filename, request.point)
+    if request.path is None:
+        datapath = data_cache.nexus_lookup(request.filename)
+    else:
+        datapath = request.path
+    url = data_cache.nexus_url(datapath, request.filename)
+    fullpath = data_cache.cache_url(url, data_cache.NEXUS_FOLDER)
+    return h5py.File(fullpath)
+
+def demo():
+    filename = "sans68869.nxs.ngv"
+    request = models.MetadataRequest(filename=filename,refresh=True)
+    #lookup_nexus(request)
+    print(metadata(request))
+
+if __name__ == "__main__":
+    demo()

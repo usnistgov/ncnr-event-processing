@@ -144,11 +144,15 @@ class DeviceLog:
 
 @dataclass
 class MetadataRequest:
-
     #: Name of the nexus file.
     filename: str
+    #: Path to the data directory relative to data root. If None, then search
+    #: for the file in the experiment metadata service.
+    path: str|None = None
     #: For scan measurements, which point number in the scan
     point: int = 0
+    #: Refetch remote files even if they are cached.
+    refresh: bool = False
 
 @dataclass
 class MetadataReply:
@@ -171,7 +175,7 @@ class MetadataReply:
     #: Environment logs, with values for min, max, mean and std across the measurement
     logs: dict[str, DeviceLog]
     #: Measurement mode: relaxation, strobe, sweep
-    mode: str
+    event_mode: str
     #: Sweep device, start, stop, #cycles
     sweep: Sweep|None
 
