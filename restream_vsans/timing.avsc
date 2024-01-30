@@ -1,0 +1,12 @@
+{
+    "type": "record",
+    "name": "timing_event",
+    "doc": "Timing activity for the experiment.\n*timestamp* is nanoseconds since Jan 1, 1970.\n*activity* is one of arm=1 for starting a count, disarm=2 for ending a count, or T0=3 for a timing trigger (for example, from chopper zero or sample environment pulse).\nThe interpretation of the T0 trigger will be highly dependent on instrument configuration and experiment type. Measurement metadata should specify its use. [Note: enums are encoded as ints on the wire, with value corresponding to position in the list, so add to the end and never delete. Maybe use type 'int' in the schema directly so python doesn't create the 'T0' string for every 60 Hz pulse.]",
+    "fields": [{
+        "name": "timestamp",
+        "type": "long"
+    }, {
+        "name": "trigger",
+        "type": "int"
+    }]
+}

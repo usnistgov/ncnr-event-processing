@@ -1,0 +1,15 @@
+{
+    "type": "record",
+    "name": "device_event",
+    "doc": "Device monitor for the experiment.\n*timestamp* is nanoseconds since Jan 1, 1970.\n*activity* is one of arm=1 for starting a count, disarm=2 for ending a count, or T0=3 for a timing trigger (for example, from chopper zero or sample environment pulse).\nThe interpretation of the T0 trigger will be highly dependent on instrument configuration and experiment type. Measurement metadata should specify its use.",
+    "fields": [{
+        "name": "timestamp",
+        "type": "long"
+    }, {
+        "name": "value",
+        "type": "float"
+    }, {
+        "name": "device",
+        "type": "string"
+    }]
+}

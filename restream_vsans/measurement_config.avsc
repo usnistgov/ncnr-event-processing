@@ -1,0 +1,21 @@
+{type: record, 
+ name: measurement_config,
+ namespace: ncnr,
+ doc: "Neutron count start identifier. This allows us to find the start of the event stream for the measurement using a key provided by Nice.\nFor instruments with fast shutter triggers there may be multiple arm events for the same measurement. Each arm event will be submitted as a separate record in the stream, but with the same measurement id. The histogramming tool will use the timestamp from the most recent record containing the measurement id as the time offset to search for the event stream.",
+ fields: [
+  {name: timestamp, type: long, doc: "timestamp for arming the detector (ns); message timestamp_ms is floor(timestamp/1000)"},
+  {name: instrument_id, type: string, doc: "name of the instrument (in case we have one stream for metadata across all instruments)"},
+  {name: measurement_id, type: string, doc: "string representing the measurement, suitable for use as a filename using $path/$measurement_id.$ext"},
+
+  // Some other information that you might have available within nisto/viper
+  {name: histogram_axis, type: string, doc: "device name such as 'twotheta' or 'temperature', or for relaxation measurements, simply 'time'"},
+  {name: active_detectors, type: array, items: int, default: [], doc: "list of detector ids active in the measurement (corresponds to topic partitions in kafka"},
+  {name: active_devices, type: array, items: string, default: [], doc: "motors and environment variables that change during the measurement"},
+
+  // Proper reconstruction for time at sample for each event requires that we subtract travel time from sample to detector from event time at the detector.
+  // This requires wavelength of the neutron and distance along the beam path from sample to detector. If the rocking motor is an analyzer then the wavelength, and hence the travel time, will depend on motor position.
+  // Some of this information, such as sample to detector distance, may not be under motor control, and therefore unknown to Nice. This should be stored in the nexus instrument definition provided to nice by the instrument scientist and used to construct the nexus file.
+
+  {name: metadata, type: map, values: string, doc: "arbitrary metadata encoded as json, ideally supplied by Nice"}
+
+]}

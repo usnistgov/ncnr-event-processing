@@ -1,0 +1,23 @@
+{
+    "type": "record",
+    "name": "neutron_packet",
+    "namespace": "ncnr",
+    "doc": "Neutron event packet.\n*timestamp* is nanoseconds since Jan 1, 1970. Events need not be ordered within a packet, but they are ordered between packets within the same detector bank.\n*pixel_id* is instrument dependent, but usually encode (x,y) as (x<<16+y).\nEach detector bank uses its own partition number. Details about detector geometry and associated positioning motors is available in the nexus config structure.\nThe neutron event packet is also used for monitors, with pixel_id=0 and partition representing monitor id (using zero for the primary monitor). [Maybe use a single partition, but pixel_id for monitor number since we are sending it anyway. Or maybe have point detector packet with no pixel_id if we are concerned about data size for the monitor channel.]",
+    "fields": [{
+        "name": "neutrons",
+        "type": {
+            "type": "array",
+            "items": {
+                "type": "record",
+                "name": "neutron",
+                "fields": [{
+                    "name": "timestamp",
+                    "type": "long"
+                }, {
+                    "name": "pixel_id",
+                    "type": "int"
+                }]
+            }
+        }
+    }]
+}
