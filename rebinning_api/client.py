@@ -1,10 +1,12 @@
+from dataclasses import asdict
 import json
 from msgpack import unpackb
 import requests
 import numpy as np
 
-
+import models
 from models import VSANS, RebinnedData, RebinUniformCount, RebinUniformWidth, NumpyArray
+import serial
 
 HOST = "http://localhost:8000"
 
@@ -21,12 +23,11 @@ def get_rebinned():
 
 
 def post(endpoint, request):
-    url = f"{HOST}/{request}"
-    data = serial.dumps(request)
-    headers = {"Content-Type": "application/json", "Accept": "application/msgpack"}
-    r = requests.post(url, data=data, headers=headers)
-    result = unpackb(r.content)['result']
-    result = serial.loads(result)
+    url = f"{HOST}/{endpoint}"
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    r = requests.post(url, json=asdict(request), headers=headers)
+    # result = unpackb(r.content)['result']
+    result = serial.loads(r.content)
     return result
 
 def metadata(filename, point=0):

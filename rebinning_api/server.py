@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from typing import Dict, Literal, Optional, Sequence, Tuple, Union
 
 from fastapi import FastAPI
@@ -6,6 +7,8 @@ from fastapi.responses import Response, StreamingResponse
 # from msgpack_asgi import MessagePackMiddleware
 from msgpack import packb
 
+import models
+import serial
 from models import VSANS, RebinUniformCount, RebinUniformWidth, NumpyArray, RebinnedData, InstrumentName
 
 import numpy as np
@@ -41,7 +44,7 @@ def rebin(
 
 # Not yet implemented....
 @app.post("/metadata")
-def metadata(request):
+def metadata(request: models.MetadataRequest):
     from dateutil.parser import isoparser
 
     point = request.point
@@ -58,7 +61,8 @@ def metadata(request):
     reply = models.MetadataReply(
         request=request,
         numpoints=1,
-        timestamp=isoparser().isoparse(timestamp),
+        # timestamp=isoparser().isoparse(timestamp),
+        timestamp=timestamp,
         duration=duration,
         trigger_interval=0.0,
         detectors=detectors,
@@ -66,7 +70,8 @@ def metadata(request):
         event_mode=event_mode,
         sweep=None,
     )
-    return reply
+    return Response(content=serial.dumps(asdict(reply)), media_type="application/json")
+
 
 def lookup_nexus(request):
 

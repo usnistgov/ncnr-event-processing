@@ -29,6 +29,8 @@ class Encoder(json.JSONEncoder):
         if isinstance(obj, bytes):
             data = base64.b64encode(obj).decode('ascii')
             return dict(__binary__=data)
+        if isinstance(obj, np.float32):
+            return float(obj)
         return json.JSONEncoder.default(self, obj)
 
 def decode_hook(obj):
