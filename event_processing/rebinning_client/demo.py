@@ -68,7 +68,8 @@ datafiles_data = {
         "page": 0,
         "rowsNumber": 0,
     },
-    'selection': ''
+    'selection': '',
+    'selection_path': '',
 }
 
 @ui.refreshable
@@ -100,8 +101,8 @@ def experiments_table():
 def get_metadata_columns(rows):
     keys = set()
     for row in rows:
-        metadata_string = row.get('metadata', '{}')
-        metadata = json.loads(metadata_string)
+        metadata_string = row.get('metadata', '')
+        metadata = json.loads(metadata_string) if metadata_string else {}
         row['metadata'] = metadata
         for key in metadata:
             keys.add(key)
@@ -121,8 +122,17 @@ def datafiles_table():
     ]
 
     def select_handler(e):
-        selected_id = e.selection[0]['filename'] if len(e.selection) > 0 else ''
+        if len(e.selection) == 0:
+            selected_id = ''
+            selected_path = ''
+        else:
+            selected = e.selection[0]
+            selected_id = selected['filename']
+            selected_path = selected['localdir']
         datafiles_data['selection'] = selected_id
+        datafiles_data['selection_path'] = selected_path
+        if selected_id != '':
+            ui.tab_panels(tabs).value = rebinning_params
     
     extra_cols = get_metadata_columns(datafiles_data['rows'])
 
@@ -144,6 +154,7 @@ class ExperimentSearchParams:
     instrument_name: Optional[str] = None
     participant_name: Optional[str] = None
     experiment_title: Optional[str] = None
+    experiment_id: Optional[str] = None
     page_size: int = 10
     offset: int = 0
 
@@ -160,6 +171,8 @@ class ExperimentSearchParams:
             params['participant_name'] = f"%{self.participant_name}%"
         if self.experiment_title is not None:
             params['title'] = f"%{self.experiment_title}%"
+        if self.experiment_id:
+            params['id'] = f"{self.experiment_id}"
         if update_total:
             full_count_params = {"full_count": True}
             full_count_params.update(params)
@@ -186,6 +199,7 @@ experiment_search_params = ExperimentSearchParams()
 @dataclass
 class DatafileSearchParams:
     experiment_id: Optional[str] = None
+    filename_substring: str = ''
     page_size: int = 10
     offset: int = 0
 
@@ -203,6 +217,8 @@ class DatafileSearchParams:
             if update_total:
                 self.offset = 0
             params = { "offset": self.offset, "limit": self.page_size, 'experiment_id': self.experiment_id }
+            if self.filename_substring:
+                params['filename'] = f"%{self.filename_substring}%"
             if update_total:
                 full_count_params = {"full_count": True}
                 full_count_params.update(params)
@@ -270,12 +286,17 @@ with ui.tab_panels(tabs, value=exp_selector).classes('w-full'):
                       label='Participant name',
                       placeholder='start typing',
                       on_change=experiment_search_params.search,
-                    ).bind_value(experiment_search_params, 'participant_name')
+                    ).bind_value(experiment_search_params, 'participant_name').props('clearable')
                 experiment_title = ui.input(
                       label='Experiment title',
                       placeholder='start typing',
                       on_change=experiment_search_params.search,
-                    ).bind_value(experiment_search_params, 'experiment_title')
+                    ).bind_value(experiment_search_params, 'experiment_title').props('clearable')
+                experiment_id_input = ui.input(
+                      label='Experiment ID',
+                      placeholder='start typing',
+                      on_change=experiment_search_params.search,
+                    ).bind_value(experiment_search_params, 'experiment_id')
                 with ui.row():
                     ui.label('Selected:')
                     ui.label().bind_text_from(experiment_data, 'selection')
@@ -283,16 +304,45 @@ with ui.tab_panels(tabs, value=exp_selector).classes('w-full'):
                 experiments_table()
 
     with ui.tab_panel(file_selector):
-        experiment_id = ui.input(
-            label='Experiment ID (IMS)',
-            on_change=datafile_search_params.search,
-        )
-        experiment_id.bind_value_from(experiment_data, 'selection')
-        experiment_id.bind_value_to(datafile_search_params, 'experiment_id')
+        with ui.row().classes('w-full justify-between'):
+            filename_search = ui.input(
+                      label='Filename search',
+                      placeholder='start typing',
+                      on_change=datafile_search_params.search,
+                    ).bind_value(datafile_search_params, 'filename_substring').props('clearable')
+            with ui.row():
+                experiment_id = ui.input(
+                    label='Experiment ID (IMS)',
+                    on_change=datafile_search_params.search,
+                )
+                experiment_id.bind_value_from(experiment_data, 'selection')
+                experiment_id.bind_value_to(datafile_search_params, 'experiment_id')
+
+                filename = ui.input(
+                    label='Filename',
+                )
+                filename.bind_value_from(datafiles_data, 'selection')
+                filename.props("readonly")
+               
         datafiles_table()
 
     with ui.tab_panel(rebinning_params):
-        ui.label('Second tab')
+        with ui.row():
+            experiment_id = ui.input(
+                label='Experiment ID (IMS)',
+            )
+            experiment_id.bind_value_from(experiment_data, 'selection')
+            experiment_id.props('readonly')
+            experiment_id.bind_value_to(datafile_search_params, 'experiment_id')
+
+            filename = ui.input(
+                label='Filename',
+            )
+            filename.bind_value_from(datafiles_data, 'selection')
+            filename.props('readonly')
+
+            localdir = ui.input(label='Path').props('readonly')
+            localdir.bind_value_from(datafiles_data, 'selection_path')
 
 
 ui.run(favicon=FAVICON)
