@@ -62,7 +62,7 @@ class VSANSEvents(object):
             # then it's an array, treat as bin edges in seconds:
             time_slices = time_slices / TIMESTAMP_RESOLUTION
         time_edges = np.histogram_bin_edges(self.ts, bins=time_slices)
-        #print(time_edges)
+        print(time_edges)
         time_bins = np.searchsorted(time_edges, self.ts, side='left')
         n_bins = len(time_edges) - 1
         #print(n_bins, time_slices, time_edges, time_bins)
@@ -100,12 +100,42 @@ class VSANSEvents(object):
 
 
 def demo():
-    filename = "./sample_events/20191005231924501_1.hst"
-    events = vsans_events(filename)
+    from matplotlib import pyplot as plt
 
-    detectors = events.rebin(10)
-    for det in detectors:
-        print(det, 'sum:', np.sum(detectors[det]))
+    cache = "cache/event_files"
+    runs = [
+        "20201008221350744",
+        "20201009143217794",
+        "20201010115802114",
+        "20201011115726522",
+    ]
+    run = runs[0]
+    events = {}
+    for position in [0, 1]:
+        filename = f"{cache}/{run}_{position}.hst"
+        events[position] = VSANSEvents(filename)
+
+    for position in [0, 1]:
+        detectors, edges = events[position].rebin(100)
+        for name, data in detectors.items():
+            integrated = np.sum(data, axis=0)
+            integrated = np.sum(integrated, axis=0)
+            #print(name, 'sum:', integrated, integrated.shape)
+            plt.plot(edges[:-1], integrated, label=f"{name}-{position}")
+    plt.legend()
+
+    if 0:
+        times, counts0 = events[0].counts_vs_time(timestep=1.0)
+        times, counts1 = events[1].counts_vs_time(timestep=1.0)
+        index = slice(None)
+        #index = (times >= 250)&(times<=1800)
+
+        plt.figure()
+        plt.plot(times[index], counts0[index], label=f"position 0")
+        plt.plot(times[index], counts1[index], label=f"position 1")
+        plt.legend()
+
+    plt.show()
 
     return events
 

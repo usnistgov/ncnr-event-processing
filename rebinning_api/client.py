@@ -1,10 +1,12 @@
+from dataclasses import asdict
 import json
 from msgpack import unpackb
 import requests
 import numpy as np
 
-
+import models
 from models import VSANS, RebinnedData, RebinUniformCount, RebinUniformWidth, NumpyArray
+import serial
 
 HOST = "http://localhost:8000"
 
@@ -21,16 +23,15 @@ def get_rebinned():
 
 
 def post(endpoint, request):
-    url = f"{HOST}/{request}"
-    data = serial.dumps(request)
-    headers = {"Content-Type": "application/json", "Accept": "application/msgpack"}
-    r = requests.post(url, data=data, headers=headers)
-    result = unpackb(r.content)['result']
-    result = serial.loads(result)
+    url = f"{HOST}/{endpoint}"
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    r = requests.post(url, json=asdict(request), headers=headers)
+    # result = unpackb(r.content)['result']
+    result = serial.loads(r.content)
     return result
 
-def metadata(filename, point=0):
-    request = models.MetadataRequest(filename=filename, point=point)
+def metadata(filename, path=None, point=0):
+    request = models.MetadataRequest(filename=filename, path=path, point=point)
     reply = post("metadata", request)
     return reply
 
@@ -151,5 +152,10 @@ def _lin_edges(duration, start, end, interval=None, nbins=None):
 
     return edges
 
+def demo():
+    filename = "sans68869.nxs.ngv"
+    path = "vsans/202009/27861/data"
+    print(metadata(filename, path=path))
+
 if __name__ == '__main__':
-    get_rebinned()
+    demo()
