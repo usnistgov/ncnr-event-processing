@@ -30,8 +30,8 @@ def post(endpoint, request):
     result = serial.loads(r.content)
     return result
 
-def metadata(filename, point=0):
-    request = models.MetadataRequest(filename=filename, point=point)
+def metadata(filename, path=None, point=0):
+    request = models.MetadataRequest(filename=filename, path=path, point=point)
     reply = post("metadata", request)
     return reply
 
@@ -152,5 +152,10 @@ def _lin_edges(duration, start, end, interval=None, nbins=None):
 
     return edges
 
+def demo():
+    filename = "sans68869.nxs.ngv"
+    path = "vsans/202009/27861/data"
+    print(metadata(filename, path=path))
+
 if __name__ == '__main__':
-    get_rebinned()
+    demo()
