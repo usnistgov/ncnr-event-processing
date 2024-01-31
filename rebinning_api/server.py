@@ -1,15 +1,11 @@
 from dataclasses import asdict
-from typing import Dict, Literal, Optional, Sequence, Tuple, Union
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, StreamingResponse
-# from msgpack_asgi import MessagePackMiddleware
-from msgpack import packb
 
 import models
 import serial
-from models import VSANS, RebinUniformCount, RebinUniformWidth, NumpyArray, RebinnedData, InstrumentName
 
 import numpy as np
 import h5py
@@ -20,6 +16,14 @@ import models, data_cache, iso8601
 app = FastAPI()
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
+
+_ = '''
+from typing import Dict, Literal, Optional, Sequence, Tuple, Union
+
+# from msgpack_asgi import MessagePackMiddleware
+from msgpack import packb
+
+from models import VSANS, RebinUniformCount, RebinUniformWidth, NumpyArray, RebinnedData, InstrumentName
 
 default_instrument = VSANS()
 default_rebinning = RebinUniformCount(num_bins=10)
@@ -41,6 +45,7 @@ def rebin(
     print(instrument, rebin_parameters)
     response_data = {"instrument": instrument.model_dump(), "rebin_parameters": rebin_parameters.model_dump(), "result": make_dummy_response().model_dump()}
     return Response(content=packb(response_data), media_type="application/msgpack")
+'''
 
 # Not yet implemented....
 @app.post("/metadata")
@@ -48,7 +53,9 @@ def metadata(request: models.MetadataRequest):
     from dateutil.parser import isoparser
 
     point = request.point
-    nexus = lookup_nexus(request)
+    path, filename = request.path, request.filename
+    nexus = data_cache.load_nexus(filename, datapath=path)
+
     # TODO: what if there are multiple entries?
     entry = list(nexus.values())[0]
     timestamp = entry['start_time'][()][0].decode('ascii')
@@ -90,7 +97,7 @@ def lookup_nexus(request):
 def demo():
     filename = "sans68869.nxs.ngv"
     request = models.MetadataRequest(filename=filename,refresh=True)
-    #lookup_nexus(request)
+    #data_cache.load_nexus(request.filename, datapath=request.path)
     print(metadata(request))
 
 if __name__ == "__main__":

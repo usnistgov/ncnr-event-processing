@@ -1,16 +1,17 @@
 from dataclasses import asdict
 import json
-from msgpack import unpackb
+
 import requests
 import numpy as np
 
 import models
-from models import VSANS, RebinnedData, RebinUniformCount, RebinUniformWidth, NumpyArray
 import serial
 
 HOST = "http://localhost:8000"
 
-
+_ = '''
+from msgpack import unpackb
+from models import VSANS, RebinnedData, RebinUniformCount, RebinUniformWidth, NumpyArray
 def get_rebinned():
     data = VSANS().model_dump_json()
     r = requests.post(f"{HOST}/rebin", data=data, headers={"Content-Type": "application/json", "Accept": "application/msgpack"})
@@ -20,7 +21,7 @@ def get_rebinned():
     for dname, v in result['devices'].items():
         result['devices'][dname] = NumpyArray(**v).to_ndarray()
     print(result)
-
+'''
 
 def post(endpoint, request):
     url = f"{HOST}/{endpoint}"

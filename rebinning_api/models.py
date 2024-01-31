@@ -1,12 +1,12 @@
-from typing import Dict, Literal, Optional, Sequence, Tuple, Union
-from enum import StrEnum
-
 from dataclasses import dataclass
 from datetime import datetime
 
-from pydantic import BaseModel
 from numpy import ndarray as vector, ndarray as array
 
+_ = '''
+from pydantic import BaseModel
+from typing import Dict, Literal, Optional, Sequence, Tuple, Union
+from enum import StrEnum
 
 class NumpyArray(BaseModel):
     data: bytes
@@ -43,6 +43,7 @@ class InstrumentName(StrEnum):
     VSANS = "vsans"
     CANDOR = "candor"
     MACS = "macs"
+'''
 
 @dataclass
 class TimeMask:
