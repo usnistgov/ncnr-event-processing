@@ -6,3 +6,10 @@ rebinning_api codebase.
 As of this writing, cache_flat.py plus the *.avsc files form a combined
 live streaming cache (for live data) as well as an historical event
 extraction tool for particular nexus files.
+
+To run:
+
+```
+event-processing$ pip install uvicorn
+event-processing$ PYTHONPATH=rebinning_api uvicorn server:app
+```
