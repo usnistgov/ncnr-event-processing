@@ -53,9 +53,13 @@ def bundle(reply):
     #print("encoded reply", data)
     return Response(content=data, media_type="application/json")
 
+def unbundle(reply):
+    data = reply.body
+    return serial.loads(data)
+
 @app.post("/metadata")
-def metadata(request): #models.Measurement):
-    print("metadata", request)
+def get_metadata(request): #models.Measurement):
+    #print("metadata", type(request), request)
     point = request.point
     path, filename = request.path, request.filename
     nexus = data_cache.load_nexus(filename, datapath=path)
@@ -87,8 +91,8 @@ def metadata(request): #models.Measurement):
     return bundle(reply)
 
 @app.post("/summary_time")
-def summary_time(request): # models.SummaryTimeRequest):
-    print("summary_time", request)
+def get_summary_time(request): # models.SummaryTimeRequest):
+    #print("summary_time", request)
 
     point = request.measurement.point
     path, filename = request.measurement.path, request.measurement.filename
@@ -99,23 +103,28 @@ def summary_time(request): # models.SummaryTimeRequest):
     entry = list(nexus.values())[0]
 
     # TODO: memoize counts based on request
-    counts = []
+    counts = {}
     for z, detector in (("front", "FL"), ("middle", "ML")):
+        #print("fetching")
         eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
         eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
+        #print("loading")
         events = rebin_vsans_old.VSANSEvents(eventpath)
         # TODO: correct for time of flight
         # TODO: elide events in mask
-        partial_counts, _ = events.rebin(bins.edges)
+        #print("binning")
+        partial_counts, _ = events.rebin(edges)
         for xy, data in partial_counts.items():
             counts[f"{z} {xy}"] = data
 
     # summarize
+    #print("summing")
     for detector, data in counts.items():
         integrated = np.sum(np.sum(data, axis=0), axis=0)
         counts[detector] = integrated
 
-    duration = (bins.edges[1:] - bins.edges[:-1])
+    # TODO: check the last edge is the correct length when it is truncated
+    duration = (edges[1:] - edges[:-1])
     devices = {}
     monitor = None
     reply = models.SummaryReply(
@@ -126,13 +135,22 @@ def summary_time(request): # models.SummaryTimeRequest):
         monitor=monitor,
         devices=devices,
     )
+    #print("bundling")
     return bundle(reply)
 
 def demo():
+    import client
     filename = "sans68869.nxs.ngv"
-    request = models.Measurement(filename=filename,refresh=True)
+    measurement = models.Measurement(filename=filename)
     #data_cache.load_nexus(request.filename, datapath=request.path)
-    print(metadata(request))
+    #print(get_metadata(measurement).body)
+    metadata = unbundle(get_metadata(measurement))
+    print("metadata", metadata)
+    bins = client.time_linbins(metadata)
+    request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
+    summary = unbundle(get_summary_time(request))
+    print("summary", summary)
+
 
 if __name__ == "__main__":
     demo()
