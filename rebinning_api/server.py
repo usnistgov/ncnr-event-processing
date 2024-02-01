@@ -52,7 +52,7 @@ def metadata(request: models.MetadataRequest):
     # TODO: what if there are multiple entries?
     entry = list(nexus.values())[0]
     timestamp = entry['start_time'][()][0].decode('ascii')
-    duration = entry['control/count_time'][()][point]
+    duration = float(entry['control/count_time'][()][point])
     # TODO: find active detectors
     detectors = [f"detector_{k}" for k in 'B FB FL FR FT MB ML MR MT'.split()]
     # TODO: determine mode for sweep device and triggers
@@ -70,7 +70,7 @@ def metadata(request: models.MetadataRequest):
         event_mode=event_mode,
         sweep=None,
     )
-    return Response(content=serial.dumps(asdict(reply)), media_type="application/json")
+    return reply
 
 
 def lookup_nexus(request):

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from pydantic import BaseModel
-from numpy import ndarray as vector, ndarray as array
+from pydantic_numpy import PydanticNumpyArray as vector, PydanticNumpyArray as array
 
 
 class NumpyArray(BaseModel):

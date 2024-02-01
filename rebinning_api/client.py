@@ -26,13 +26,12 @@ def post(endpoint, request):
     url = f"{HOST}/{endpoint}"
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     r = requests.post(url, json=asdict(request), headers=headers)
-    # result = unpackb(r.content)['result']
-    result = serial.loads(r.content)
-    return result
+    return r.json()
 
 def metadata(filename, path=None, point=0):
     request = models.MetadataRequest(filename=filename, path=path, point=point)
-    reply = post("metadata", request)
+    json_result = post("metadata", request)
+    reply = models.MetadataReply(**json_result)
     return reply
 
 def triggers(metadata, point=0):
