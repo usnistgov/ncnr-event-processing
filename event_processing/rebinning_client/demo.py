@@ -45,8 +45,8 @@ LTIzVDE2OjI1OjAwLTA1OjAwaV62IgAAAABJRU5ErkJggg==
 """.replace("\n", "")
 
 FAVICON = f"data:image/png;base64,{FAVICON_DATA}"
-API_ROOT = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
-
+NCNR_METADATA_API_URL = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
+# CHRNS_REBINNING_API_URL = "http://localhost:8000"
 
 @ui.page('/')
 def index():
@@ -180,12 +180,12 @@ def index():
             if update_total:
                 full_count_params = {"full_count": True}
                 full_count_params.update(params)
-                full_count_result = requests.get(f"{API_ROOT}/experiments", params=full_count_params).json()
+                full_count_result = requests.get(f"{NCNR_METADATA_API_URL}/experiments", params=full_count_params).json()
                 if len(full_count_result) > 0:
                     experiment_data['pagination']['rowsNumber'] = full_count_result[0].get("full_count", 0)
                     experiment_data['pagination']['page'] = 0
 
-            r = requests.get(f"{API_ROOT}/experiments", params=params).json()
+            r = requests.get(f"{NCNR_METADATA_API_URL}/experiments", params=params).json()
             experiment_data['rows'] = r
             experiments_table.refresh()
 
@@ -226,11 +226,11 @@ def index():
                 if update_total:
                     full_count_params = {"full_count": True}
                     full_count_params.update(params)
-                    full_count_result = requests.get(f"{API_ROOT}/datafiles", params=full_count_params).json()
+                    full_count_result = requests.get(f"{NCNR_METADATA_API_URL}/datafiles", params=full_count_params).json()
                     if len(full_count_result) > 0:
                         datafiles_data['pagination']['rowsNumber'] = full_count_result[0].get("full_count", 0)
                     datafiles_data['pagination']['page'] = 0
-                r = requests.get(f"{API_ROOT}/datafiles", params=params).json()
+                r = requests.get(f"{NCNR_METADATA_API_URL}/datafiles", params=params).json()
                 datafiles_data['rows'] = r
 
             datafiles_table.refresh()
