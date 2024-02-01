@@ -3,8 +3,7 @@ from dataclasses import asdict
 import requests
 import numpy as np
 
-import models
-import serial
+from . import models
 
 HOST = "http://localhost:8000"
 

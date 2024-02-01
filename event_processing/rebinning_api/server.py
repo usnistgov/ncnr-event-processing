@@ -8,10 +8,9 @@ from fastapi.responses import Response, StreamingResponse
 import numpy as np
 import h5py
 
-# TODO: make into a package with relative imports
-import models
-import data_cache
-import rebin_vsans_old
+from . import models
+from . import data_cache
+from . import rebin_vsans_old
 
 app = FastAPI()
 app.add_middleware(GZipMiddleware, minimum_size=1000)

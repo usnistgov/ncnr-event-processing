@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List
 
 from pydantic import BaseModel
-from pydantic_numpy import PydanticNumpyArray as vector, PydanticNumpyArray as array
+from .pydantic_numpy import PydanticNumpyArray as vector, PydanticNumpyArray as array
 
 _ = '''
 from pydantic import BaseModel
