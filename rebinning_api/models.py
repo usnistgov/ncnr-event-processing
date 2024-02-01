@@ -213,9 +213,29 @@ class SummaryReply(BaseModel):
     #: Device values (temperature, pressure, motor) with statistics over the time bin.
     devices: dict[str, DeviceLog]
 
-# Note: we have an implicit assumption that the server is caching request
-# info so that for example, subsequent slices can be quickly retrieved given
-# the hash of (filename, point, bins)
+# Note: we have an implicit assumption that the server is caching request info
+# so that for example, subsequent slices can be quickly retrieved given the hash
+# of (filename, point, bins)
+#
+# Ewww... moving detector while counting. The solid angle per region could
+# change for each frame!
+#
+# Worse, the solid angle per pixel can change. I don't want to send that much
+# info over the wire. The math is simple enough:
+#
+#    sr = ΔθΔφ ≈ r Δx • r Δy = r² ΔxΔy = (x² + y² + z²) ΔxΔy
+#       = ((px+x')² + (py+y')² + (pz+z')²)  ΔxΔy
+#
+# where (px,py,pz,ΔxΔy) are constants for each detector pixel (with pz zero
+# except on curved detectors), (x',y') are left-right and up-down shift of the
+# detector and z' is the detector distance. Only need the (x',y',z') for each
+# detector at each frame regardless of the number of pixels. Much more
+# manageable.
+#
+# For selecting the right binning for the histogram I don't think we care if the
+# normalization is correct. Dividing by the number of pixels in each region
+# should be good enough.
+
 class FrameReply(BaseModel):
     measurement: Measurement
     bins: Bins
