@@ -95,7 +95,7 @@ class StrobeBins:
     #: even numbered triggers. Even/odd is preserved even through masking.
     hysterisis: bool
     #: If provided, use alternate trigger values for T0
-    trigger_override: vector|None
+    trigger_override: vector | None
     #: Name of the binning class
     mode: str = "strobe"
 
@@ -144,23 +144,30 @@ class DeviceLog:
     # TODO: do we want the interpolated values as well?
 
 @dataclass
-class MetadataRequest:
+class Measurement:
     #: Name of the nexus file.
     filename: str
     #: Path to the data directory relative to data root. If None, then search
     #: for the file in the experiment metadata service.
-    path: str|None = None
-    #: For scan measurements, which point number in the scan
+    path: str | None = None
+    #: For scan measurements, which point number in the scan. [summary, frame, metadata, trigger]
     point: int = 0
-    #: Refetch remote files even if they are cached.
-    refresh: bool = False
+    #: Binning strategy [summary, frame]
+    #bins: Bins | None = None
+    #: Slice index in histogram [frame]
+    #index: int = 0
+    # TODO: maybe need methods to clean the cache?
+    ##: Refetch remote files even if they are cached.
+    #refresh: bool = False
+
+MetadataRequest = Measurement
 
 @dataclass
 class MetadataReply:
     """
     Metadata available in the NeXus file.
     """
-    request: MetadataRequest
+    measurement: Measurement
     #: Number of points in the scan
     numpoints: int
     # TODO: python datetime object? ISO8601? unix epoch? epics epoch? windows epoch?
@@ -175,25 +182,20 @@ class MetadataReply:
     detectors: list[str]
     #: Environment logs, with values for min, max, mean and std across the measurement
     logs: dict[str, DeviceLog]
-    #: Measurement mode: relaxation, strobe, sweep
+    #: Measurement mode: time, strobe, cycle, sweep, device
     event_mode: str
-    #: Sweep device, start, stop, #cycles
+    #: Sweep device, start, stop, cycles
     sweep: Sweep|None
 
 @dataclass
-class TriggerRequest:
+class TriggerReply:
     """
     Trigger data is not available in the nexus file. We need to pull it from
     kafka if not already cached, so this data is not available in the metadata
     request. The {instrument}_{timing} topic should be relatively empty so the
     retrieval shouldn't take too much time.
     """
-    filename: str
-    point: int = 0
-
-@dataclass
-class TriggerReply:
-    request: TriggerRequest
+    request: Measurement
     #: Trigger times
     triggers: vector
     # TODO: return pause/resume and fast shutter info as well
@@ -202,68 +204,47 @@ class TriggerReply:
     # is going on.
 
 @dataclass
-class SummaryRequest:
-    #: filename
-    filename: str
-    #: Point number in the file
-    point: int
-    #: Binning specification
-    bins: Bins
+class SummaryTimeRequest:
+    measurement: Measurement
+    bins: TimeBins
 
 @dataclass
 class SummaryReply:
-    request: SummaryRequest
-    #: times for the time bins
-    times: vector
-    #: counts of roi for each bin
-    counts: vector
+    measurement: Measurement
+    bins: Bins # maybe drop this because pydantic doesn't like union
+    #: measurement time x bin width for the time bins
+    duration: vector
+    #: counts of rois for each bin (one roi per detector for now)
+    counts: dict[str, vector]
     #: monitor counts for each bin
-    monitor: vector
+    monitor: vector|None
     # TODO: are device (time, value) logs meaninful for strobed and by-value binning?
     #: Device values (temperature, pressure, motor) with statistics over the time bin.
     devices: dict[str, DeviceLog]
-    #: offsets for the trigger signals
-    strobe: vector
 
 # Note: we have an implicit assumption that the server is caching request
 # info so that for example, subsequent slices can be quickly retrieved given
 # the hash of (filename, point, bins)
 @dataclass
-class FrameRequest:
-    #: filename
-    filename: str
-    #: Point number in the file
-    point: int
-    #: Binning specification
-    bins: Bins
-    #: Slice index in histogram
-    index: int
-
-@dataclass
 class FrameReply:
-    request: FrameRequest
-    #: requested slice
-    frame: int
-    #: time offset of the slice (relative to T0 for strobed, N/A for value binned)
-    time: float
-    #: total time accumulated for slice (including all events for strobed and byvalue)
-    duration: float
-    #: detector data for the individual detectors at that slice
-    detectors: dict[str, array]
-    # TODO: are device (time, value) logs meaninful for strobed and by-value binning?
-    #: Device values with statistics over the time bin.
-    devices: dict[str, DeviceLog]
-
-@dataclass
-class NexusRequest:
-    #: filename
-    filename: str
-    #: Binning specification
+    measurement: Measurement
     bins: Bins
+    #: requested slices
+    frames: vector # int
+    #: time offset of the frame (relative to T0 for strobed, N/A for value binned)
+    times: vector
+    #: total time accumulated for frame (including all events for strobed and byvalue)
+    duration: vector
+    #: detector data for the individual detectors at those slices {name: [nx x ny x nframes]}
+    counts: dict[str, array]
+    # TODO: are device (time, value) logs meaninful for strobed and by-value binning?
+    #: Device values with statistics over the time bin, one per frame
+    devices: list(dict[str, DeviceLog])
+
 
 @dataclass
 class NexusReply:
-    request: NexusRequest
+    measurement: Measurement
     data: bytes
 
 @dataclass
