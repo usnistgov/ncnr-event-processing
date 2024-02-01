@@ -91,7 +91,7 @@ def get_metadata(request: models.Measurement):
     return reply
 
 @app.post("/summary_time")
-def get_summary_time(request): # models.SummaryTimeRequest):
+def get_summary_time(request: models.SummaryTimeRequest):
     #print("summary_time", request)
 
     point = request.measurement.point

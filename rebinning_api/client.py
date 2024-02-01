@@ -2,7 +2,6 @@ from dataclasses import asdict
 
 import requests
 import numpy as np
-from pydantic import TypeAdapter
 
 import models
 import serial
@@ -27,8 +26,7 @@ def post(endpoint, request):
     url = f"{HOST}/{endpoint}"
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     #print("post", endpoint, request)
-    data = TypeAdapter(request.__class__).dump_json(request)
-    #print("encoded", data)
+    data = request.model_dump_json()
     r = requests.post(url, data=data, headers=headers)
     # result = unpackb(r.content)['result']
     if r.status_code != 200:
@@ -40,7 +38,7 @@ def get_metadata(filename, path=None, point=0):
     request = models.Measurement(filename=filename, path=path, point=point)
     reply = post("metadata", request=request)
     print("metadata post reply", reply)
-    return TypeAdapter(models.MetadataReply).validate_python(reply)
+    return models.MetadataReply.model_validate(reply)
 
 def get_triggers(metadata):
     reply = post("triggers", request=metadata.request)
@@ -162,7 +160,7 @@ def demo():
     path = "vsans/202009/27861/data"
     metadata = get_metadata(filename, path=path)
     print("metadata", metadata)
-    bins = time_linbins(metadata)
+    bins = time_linbins(metadata, interval=1.0)
     summary = get_summary(metadata, bins)
     print("summary", summary)
 

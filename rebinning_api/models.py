@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime
+from typing import List
 
+from pydantic import BaseModel
 from pydantic_numpy import PydanticNumpyArray as vector, PydanticNumpyArray as array
 
 _ = '''
@@ -45,16 +47,14 @@ class InstrumentName(StrEnum):
     MACS = "macs"
 '''
 
-@dataclass
-class TimeMask:
+class TimeMask(BaseModel):
     # TODO: do we want NaN for empty buckets?
     #: For edges [[start, end], ..., [start, end]] include events if they
     #: appear in one of the intervals. The corresponding buckets for counts,
     #: times, monitors, logs, etc. should be zero.
     edges: array # n x 2 array of bin edges
 
-@dataclass
-class TimeBins:
+class TimeBins(BaseModel):
     """
     Binning requires bin edges for the individual bins, as well as a mask
     indicating which parts of the time series should be included. Use this
@@ -84,8 +84,7 @@ class TimeBins:
     #: Name of the binning class
     mode: str = "time"
 
-@dataclass
-class StrobeBins:
+class StrobeBins(BaseModel):
     #: Bin edges (time bins)
     edges: vector
     #: Mask showing included time windows within the measurement, or None for
@@ -99,8 +98,7 @@ class StrobeBins:
     #: Name of the binning class
     mode: str = "strobe"
 
-@dataclass
-class DeviceBins:
+class DeviceBins(BaseModel):
     #: Device being binned (motor or environment log)
     device: str
     #: Bin edges in device coordinates
@@ -116,8 +114,7 @@ Bins = TimeBins | StrobeBins | DeviceBins
 
 # TODO: Are we going to play at ToF for inelastic measurements?
 
-@dataclass
-class Sweep:
+class Sweep(BaseModel):
     """
     Device being swept plus start and end values. Sweep data is returned as
     part of the metadata reply.
@@ -131,8 +128,7 @@ class Sweep:
     #: number of cycles (or zero if indeterminate)
     cycles: int
 
-@dataclass
-class DeviceLog:
+class DeviceLog(BaseModel):
     mean: float
     std: float
     min: float
@@ -143,8 +139,7 @@ class DeviceLog:
     value: vector
     # TODO: do we want the interpolated values as well?
 
-@dataclass
-class Measurement:
+class Measurement(BaseModel):
     #: Name of the nexus file.
     filename: str
     #: Path to the data directory relative to data root. If None, then search
@@ -162,8 +157,7 @@ class Measurement:
 
 MetadataRequest = Measurement
 
-@dataclass
-class MetadataReply:
+class MetadataReply(BaseModel):
     """
     Metadata available in the NeXus file.
     """
@@ -187,8 +181,7 @@ class MetadataReply:
     #: Sweep device, start, stop, cycles
     sweep: Sweep|None
 
-@dataclass
-class TriggerReply:
+class TriggerReply(BaseModel):
     """
     Trigger data is not available in the nexus file. We need to pull it from
     kafka if not already cached, so this data is not available in the metadata
@@ -203,13 +196,11 @@ class TriggerReply:
     # By adjusting the mask the user can dip into these regions to see what
     # is going on.
 
-@dataclass
-class SummaryTimeRequest:
+class SummaryTimeRequest(BaseModel):
     measurement: Measurement
     bins: TimeBins
 
-@dataclass
-class SummaryReply:
+class SummaryReply(BaseModel):
     measurement: Measurement
     bins: Bins # maybe drop this because pydantic doesn't like union
     #: measurement time x bin width for the time bins
@@ -225,8 +216,7 @@ class SummaryReply:
 # Note: we have an implicit assumption that the server is caching request
 # info so that for example, subsequent slices can be quickly retrieved given
 # the hash of (filename, point, bins)
-@dataclass
-class FrameReply:
+class FrameReply(BaseModel):
     measurement: Measurement
     bins: Bins
     #: requested slices
@@ -239,16 +229,14 @@ class FrameReply:
     counts: dict[str, array]
     # TODO: are device (time, value) logs meaninful for strobed and by-value binning?
     #: Device values with statistics over the time bin, one per frame
-    devices: list(dict[str, DeviceLog])
+    devices: List[dict[str, DeviceLog]]
 
 
-@dataclass
-class NexusReply:
+class NexusReply(BaseModel):
     measurement: Measurement
     data: bytes
 
-@dataclass
-class LogRequest:
+class LogRequest(BaseModel):
     """
     Return log data (e.g., temperature) over a fixed time interval.
     """
@@ -257,8 +245,7 @@ class LogRequest:
     start: datetime
     end: datetime
 
-@dataclass
-class LogReply:
+class LogReply(BaseModel):
     """
     Return log data (e.g., temperature) over a fixed time interval. This returns
     the value and the time that it was recorded with no interpolation.
