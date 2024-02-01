@@ -74,7 +74,7 @@ class _NumpyPydanticAnnotation:
         cls, _core_schema: core_schema.CoreSchema, handler: GetJsonSchemaHandler
     ) -> JsonSchemaValue:
         # Use the same schema that would be used for `NumpyArrayModel`
-        return handler(NumpyArrayModel.schema())
+        return NumpyArrayModel.schema()
 
 # We now create an `Annotated` wrapper that we'll use as the annotation for fields on `BaseModel`s, etc.
 PydanticNumpyArray = Annotated[
