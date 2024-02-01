@@ -1,13 +1,15 @@
 from pathlib import Path
-import requests
 import os
+
+import requests
+import h5py
 
 NEXUS_FOLDER = Path("cache/nexus_files").absolute()
 METADATA_ENDPOINT = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
 NCNRDATA_ENDPOINT = "https://ncnr.nist.gov/pub/ncnrdata/"
 #NCNRDATA_ENDPOINT = "https://charlotte.ncnr.nist.gov/pub/ncnrdata/"
 
-def nexus_lookup(nexusfile):
+def search_filename(nexusfile):
     """Lookup the download path for a nexus file given its name"""
     # Need cycle and experiment ID to retrieve nexus file.
     url = METADATA_ENDPOINT + "/datafiles"
@@ -38,3 +40,10 @@ def cache_url(url, cachedir, filename=None, refresh=False):
         open(fullpath, 'wb').write(r.content)
         #print(f"fetched {filename}")
     return fullpath
+
+def load_nexus(filename, datapath=None):
+    if datapath is None:
+        datapath = search_filename(filename)
+    url = nexus_url(datapath, filename)
+    fullpath = cache_url(url, NEXUS_FOLDER)
+    return h5py.File(fullpath)

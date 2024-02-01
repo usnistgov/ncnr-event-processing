@@ -1,16 +1,17 @@
 from dataclasses import asdict
-import json
-from msgpack import unpackb
+
 import requests
 import numpy as np
+from pydantic import TypeAdapter
 
 import models
-from models import VSANS, RebinnedData, RebinUniformCount, RebinUniformWidth, NumpyArray
 import serial
 
 HOST = "http://localhost:8000"
 
-
+_ = '''
+from msgpack import unpackb
+from models import VSANS, RebinnedData, RebinUniformCount, RebinUniformWidth, NumpyArray
 def get_rebinned():
     data = VSANS().model_dump_json()
     r = requests.post(f"{HOST}/rebin", data=data, headers={"Content-Type": "application/json", "Accept": "application/msgpack"})
@@ -20,52 +21,57 @@ def get_rebinned():
     for dname, v in result['devices'].items():
         result['devices'][dname] = NumpyArray(**v).to_ndarray()
     print(result)
-
+'''
 
 def post(endpoint, request):
     url = f"{HOST}/{endpoint}"
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    r = requests.post(url, json=asdict(request), headers=headers)
-    return r.json()
+    #print("post", endpoint, request)
+    data = TypeAdapter(request.__class__).dump_json(request)
+    #print("encoded", data)
+    r = requests.post(url, data=data, headers=headers)
+    # result = unpackb(r.content)['result']
+    if r.status_code != 200:
+        raise r.raise_for_status()
+    result = r.json()
+    return result
 
-def metadata(filename, path=None, point=0):
-    request = models.MetadataRequest(filename=filename, path=path, point=point)
-    json_result = post("metadata", request)
-    reply = models.MetadataReply(**json_result)
+def get_metadata(filename, path=None, point=0):
+    request = models.Measurement(filename=filename, path=path, point=point)
+    reply = post("metadata", request=request)
+    print("metadata post reply", reply)
+    return TypeAdapter(models.MetadataReply).validate_python(reply)
+
+def get_triggers(metadata):
+    reply = post("triggers", request=metadata.request)
     return reply
 
-def triggers(metadata, point=0):
-    filename = metadata.request.filename
-    request = models.TriggerRequest(filename=filename, point=point)
-    reply = post("triggers", request)
-    return reply
-
-def summary(metadata, bins, point=0):
+def get_summary(metadata, bins):
     """
     bins can be by time, by time with strobe, or by device value.
 
     Use one of time_linbins, strobe_linbins, or sweep_linbins to specify.
     """
-    filename = metadata.request.filename
-    request = models.SummaryRequest(filename=filename, bins=bins, point=point)
-    reply = post("summary", request)
-    return reply
+    if bins.mode == "time":
+        assert isinstance(bins, models.TimeBins)
+        request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
+    reply = post(f"summary_{bins.mode}", request)
+    return models.SummaryReply(**reply)
 
-def frame(metadata, bins, index=0, point=0):
+def get_frames(metadata, bins, index=0):
     """
     bins can be by time, by time with strobe, or by device value.
 
     Use one of time_linbins, strobe_linbins, or sweep_linbins to specify.
     """
-    filename = metadata.request.filename
-    request = models.FrameRequest(filename=filename, bins=bins, point=point, index=index)
+    request = copy(metadata.request)
+    request.bins = bins
+    request.index = index
     reply = post("frame", request)
     return reply
 
-def nexus(metadata, bins):
-    filename = metadata.request.filename
-    request = models.NexusRequest(filename=filename, bins=bins)
-    reply = post("nexus", request)
+def get_nexus(metadata, bins):
+    reply = post("nexus", metadata.measurement) # point number ignored
     return reply
 
 
@@ -86,13 +92,13 @@ def time_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=
         if end is None:
             end = mask_end
     edges = _lin_edges(metadata.duration, start, end, interval)
-    bins = TimeBins(edges=edges, mask=mask)
+    bins = models.TimeBins(edges=edges, mask=mask)
     return bins
 
 def strobe_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=0,
         hysterisis=False, trigger_override=None):
     edges = _lin_edges(metadata.trigger_interval, start, end, interval)
-    bins = StrobeBins(edges=edges, mask=mask, hysterisis=hysterisis, trigger_override=trigger_override)
+    bins = models.StrobeBins(edges=edges, mask=mask, hysterisis=hysterisis, trigger_override=trigger_override)
     return bins
 
 def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
@@ -105,7 +111,7 @@ def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
     if stop is None:
         stop = metadata.sweep.stop
     edges = np.linspace(start, stop, nbins+1)
-    bins = SweepBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
+    bins = models.SweepBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
     return bins
 
 def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
@@ -126,7 +132,7 @@ def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=Non
             edges = edges[:-1]
     else:
         raise TypeError("Must specify one of interval or nbins for edges")
-    bins = SweepBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
+    bins = models.SweepBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
     return bins
 
 def _lin_edges(duration, start, end, interval=None, nbins=None):
@@ -154,7 +160,11 @@ def _lin_edges(duration, start, end, interval=None, nbins=None):
 def demo():
     filename = "sans68869.nxs.ngv"
     path = "vsans/202009/27861/data"
-    print(metadata(filename, path=path))
+    metadata = get_metadata(filename, path=path)
+    print("metadata", metadata)
+    bins = time_linbins(metadata)
+    summary = get_summary(metadata, bins)
+    print("summary", summary)
 
 if __name__ == '__main__':
     demo()

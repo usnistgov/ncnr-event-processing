@@ -1,25 +1,29 @@
 from dataclasses import asdict
-from typing import Dict, Literal, Optional, Sequence, Tuple, Union
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, StreamingResponse
-# from msgpack_asgi import MessagePackMiddleware
-from msgpack import packb
 
-import models
-import serial
-from models import VSANS, RebinUniformCount, RebinUniformWidth, NumpyArray, RebinnedData, InstrumentName
-
+#from dateutil.parser import isoparser
 import numpy as np
 import h5py
 
 # TODO: make into a package with relative imports
-import models, data_cache, iso8601
+import models
+import data_cache
+import rebin_vsans_old
 
 app = FastAPI()
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
+
+_ = '''
+from typing import Dict, Literal, Optional, Sequence, Tuple, Union
+
+# from msgpack_asgi import MessagePackMiddleware
+from msgpack import packb
+
+from models import VSANS, RebinUniformCount, RebinUniformWidth, NumpyArray, RebinnedData, InstrumentName
 
 default_instrument = VSANS()
 default_rebinning = RebinUniformCount(num_bins=10)
@@ -42,24 +46,38 @@ def rebin(
     response_data = {"instrument": instrument.model_dump(), "rebin_parameters": rebin_parameters.model_dump(), "result": make_dummy_response().model_dump()}
     return Response(content=packb(response_data), media_type="application/msgpack")
 
-# Not yet implemented....
-@app.post("/metadata")
-def metadata(request: models.MetadataRequest):
-    from dateutil.parser import isoparser
 
+def bundle(reply):
+    data = serial.dumps(reply)
+    #print("encoded reply", data)
+    return Response(content=data, media_type="application/json")
+
+def unbundle(reply):
+    data = reply.body
+    return serial.loads(data)
+'''
+
+@app.post("/metadata")
+def get_metadata(request: models.Measurement):
+    #print("metadata", type(request), request)
     point = request.point
-    nexus = lookup_nexus(request)
+    path, filename = request.path, request.filename
+    nexus = data_cache.load_nexus(filename, datapath=path)
+
     # TODO: what if there are multiple entries?
     entry = list(nexus.values())[0]
     timestamp = entry['start_time'][()][0].decode('ascii')
     duration = float(entry['control/count_time'][()][point])
     # TODO: find active detectors
-    detectors = [f"detector_{k}" for k in 'B FB FL FR FT MB ML MR MT'.split()]
+    detectors = [
+        f"{z} {xy}" for z in "front middle".split()
+        for xy in "bottom left right top".split()] # + ["back"]
+    #detectors = [f"detector_{k}" for k in 'FB FL FR FT MB ML MR MT'.split()] # + ["detector_B"]
     # TODO: determine mode for sweep device and triggers
-    event_mode = 'relaxation' # not written yet... this is the default
+    event_mode = 'time' # not written yet... this is the default
     # TODO: lookup sweep controls from nexus file
     reply = models.MetadataReply(
-        request=request,
+        measurement=request,
         numpoints=1,
         # timestamp=isoparser().isoparse(timestamp),
         timestamp=timestamp,
@@ -72,26 +90,66 @@ def metadata(request: models.MetadataRequest):
     )
     return reply
 
+@app.post("/summary_time")
+def get_summary_time(request): # models.SummaryTimeRequest):
+    #print("summary_time", request)
 
-def lookup_nexus(request):
+    point = request.measurement.point
+    path, filename = request.measurement.path, request.measurement.filename
+    edges = request.bins.edges
+    mask = request.bins.mask
 
-    # TODO: mtime on remote file for invalidating cache?
-    # TODO: nexus filename collisions?
-    # Neither of these are an issue for vsans so ignore for now.
-    print("request", request, request.path, request.filename, request.point)
-    if request.path is None:
-        datapath = data_cache.nexus_lookup(request.filename)
-    else:
-        datapath = request.path
-    url = data_cache.nexus_url(datapath, request.filename)
-    fullpath = data_cache.cache_url(url, data_cache.NEXUS_FOLDER)
-    return h5py.File(fullpath)
+    nexus = data_cache.load_nexus(filename, datapath=path)
+    entry = list(nexus.values())[0]
+
+    # TODO: memoize counts based on request
+    counts = {}
+    for z, detector in (("front", "FL"), ("middle", "ML")):
+        #print("fetching")
+        eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
+        eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
+        #print("loading")
+        events = rebin_vsans_old.VSANSEvents(eventpath)
+        # TODO: correct for time of flight
+        # TODO: elide events in mask
+        #print("binning")
+        partial_counts, _ = events.rebin(edges)
+        for xy, data in partial_counts.items():
+            counts[f"{z} {xy}"] = data
+
+    # summarize
+    #print("summing")
+    for detector, data in counts.items():
+        integrated = np.sum(np.sum(data, axis=0), axis=0)
+        counts[detector] = integrated
+
+    # TODO: check the last edge is the correct length when it is truncated
+    duration = (edges[1:] - edges[:-1])
+    devices = {}
+    monitor = None
+    reply = models.SummaryReply(
+        measurement=request.measurement,
+        bins=request.bins,
+        duration=duration,
+        counts=counts,
+        monitor=monitor,
+        devices=devices,
+    )
+    return reply
 
 def demo():
+    import client
     filename = "sans68869.nxs.ngv"
-    request = models.MetadataRequest(filename=filename,refresh=True)
-    #lookup_nexus(request)
-    print(metadata(request))
+    measurement = models.Measurement(filename=filename)
+    #data_cache.load_nexus(request.filename, datapath=request.path)
+    #print(get_metadata(measurement).body)
+    metadata = get_metadata(measurement)
+    print("metadata", metadata)
+    bins = client.time_linbins(metadata)
+    request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
+    summary = get_summary_time(request)
+    print("summary", summary)
+
 
 if __name__ == "__main__":
     demo()
