@@ -213,6 +213,28 @@ def nexus_detector_replacement(entry):
     #print("detectors", detectors)
     return detectors
 
+# TODO: optimize hdf copy, currently takes > 3 sec for test
+# can get a list of all existing links with these functions:
+#
+# def visititems(group, func):
+#     with h5py._hl.base.phil:
+#         def proxy(name):
+#             """ Call the function with the text name, not bytes """
+#             name = group._d(name)
+#             return func(name, group[name])
+#         return group.id.links.visit(proxy)
+
+# links = []
+# def find_links(name, obj):
+#     target = obj.attrs.get('target', None)
+#     if target is not None and name != target:
+#         links.append([name, target])
+
+# visititems(source, find_links)
+
+# takes 0.3 sec to find all links, 0.3 sec to copy all items...
+# so should be able to do all replacements and return copy in < 1 sec
+
 def hdf_copy(source, target, replacement):
     # type: (h5py.Group, str) -> h5py.File
     """
