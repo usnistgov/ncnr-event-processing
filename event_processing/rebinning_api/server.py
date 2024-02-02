@@ -131,19 +131,19 @@ def get_timebin_frame(index: int, request: models.SummaryTimeRequest):
     counts = bin_by_time(request.measurement, request.bins, summary=False)
     #print("loaded")
     #for k, v in counts.items(): print(k, v.shape)
-    frames = {k: v[..., index:index+1] for k, v in counts.items()}
+    data = {k: v[..., index:index+1] for k, v in counts.items()}
     #for k, v in frames.items(): print(k, v.shape)
     reply = models.FrameReply(
-        frames=frames,
+        data=data,
     )
     return reply
 
 @app.post("/timebin/frame/{start}-{end}")
 def get_timebin_frame_range(start: int, end: int, request: models.SummaryTimeRequest):
     counts = bin_by_time(request.measurement, request.bins, summary=False)
-    frames = {k: v[..., start:end] for k, v in counts.items()}
+    data = {k: v[..., start:end] for k, v in counts.items()}
     reply = models.FrameReply(
-        frames=frames,
+        data=data,
     )
     return reply
 
@@ -317,11 +317,11 @@ def demo():
     #print("summary", summary)
     index = np.searchsorted(bins.edges, 500.)
     r_one = get_timebin_frame(index, request)
-    #print("frame", index, {k: v.shape for k, v in r_one.frames.items()})
+    #print("frame", index, {k: v.shape for k, v in r_one.data.items()})
     r_many = get_timebin_frame_range(index, index+2, request)
     detector = "detector_FL"
-    #print(r_one.frames[detector].shape, r_many.frames[detector].shape)
-    assert (r_one.frames[detector][...,0] == r_many.frames[detector][..., 0]).all()
+    #print(r_one.data[detector].shape, r_many.data[detector].shape)
+    assert (r_one.data[detector][...,0] == r_many.data[detector][..., 0]).all()
     hdf = get_timebin_nexus(request)
     with open('/tmp/sample.hdf', 'wb') as fd:
         fd.write(hdf.data)

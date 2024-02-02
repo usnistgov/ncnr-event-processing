@@ -245,7 +245,7 @@ class SummaryReply(BaseModel):
 
 class FrameReply(BaseModel):
     #: {detector: [nrows,ncols,nframes]}
-    frames: dict[str, array]
+    data: dict[str, array]
 
 class NexusReply(BaseModel):
     data: bytes

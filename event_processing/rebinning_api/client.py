@@ -55,7 +55,7 @@ def get_summary(metadata, bins):
     reply = post(f"summary_{bins.mode}", request)
     return models.SummaryReply(**reply)
 
-def get_frames(metadata, bins, index=0):
+def get_frames(metadata, bins, start=0, stop=1):
     """
     bins can be by time, by time with strobe, or by device value.
 
@@ -64,11 +64,12 @@ def get_frames(metadata, bins, index=0):
     if bins.mode == "time":
         assert isinstance(bins, models.TimeBins)
         request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
-    reply = post("frame", request)
+    #reply = post(f"timebin/frame/{start}-{stop}", request)
+    reply = post(f"timebin/frame/{start}", request)
     return reply
 
 def get_nexus(metadata, bins):
-    reply = post("nexus", metadata.measurement) # point number ignored
+    reply = post("timebin/nexus", metadata.measurement) # point number ignored
     return reply
 
 
@@ -158,10 +159,15 @@ def demo():
     filename = "sans68869.nxs.ngv"
     path = "vsans/202009/27861/data"
     metadata = get_metadata(filename, path=path)
-    print("metadata", metadata)
-    bins = time_linbins(metadata, interval=1.0)
+    #print("metadata", metadata)
+    bins = time_linbins(metadata, interval=10.0)
     summary = get_summary(metadata, bins)
-    print("summary", summary)
+    #print("summary", summary)
+    #frames = get_frames(metadata, bins, 0, 2)
+    #print("frames", frames)
+    hdf = get_nexus(metadata, bins)
+    with open('/tmp/client_sample.hdf', 'wb') as fd:
+        fd.write(hdf.data)
 
 if __name__ == '__main__':
     demo()
