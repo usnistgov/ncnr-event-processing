@@ -237,20 +237,8 @@ class SummaryReply(BaseModel):
 # should be good enough.
 
 class FrameReply(BaseModel):
-    measurement: Measurement
-    bins: Bins
-    #: requested slices
-    frames: vector # int
-    #: time offset of the frame (relative to T0 for strobed, N/A for value binned)
-    times: vector
-    #: total time accumulated for frame (including all events for strobed and byvalue)
-    duration: vector
-    #: detector data for the individual detectors at those slices {name: [nx x ny x nframes]}
-    counts: dict[str, array]
-    # TODO: are device (time, value) logs meaninful for strobed and by-value binning?
-    #: Device values with statistics over the time bin, one per frame
-    devices: List[dict[str, DeviceLog]]
-
+    #: {detector: [nrows,ncols,nframes]}
+    frames: dict[str, array]
 
 class NexusReply(BaseModel):
     measurement: Measurement

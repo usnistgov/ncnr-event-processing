@@ -61,9 +61,9 @@ def get_frames(metadata, bins, index=0):
 
     Use one of time_linbins, strobe_linbins, or sweep_linbins to specify.
     """
-    request = copy(metadata.request)
-    request.bins = bins
-    request.index = index
+    if bins.mode == "time":
+        assert isinstance(bins, models.TimeBins)
+        request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
     reply = post("frame", request)
     return reply
 

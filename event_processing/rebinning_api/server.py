@@ -1,4 +1,4 @@
-from dataclasses import asdict
+import hashlib
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
@@ -104,45 +104,10 @@ def get_metadata(request: models.Measurement):
 
 @app.post("/summary_time")
 def get_summary_time(request: models.SummaryTimeRequest):
-    #print("summary_time", request)
-
-
-    point = request.measurement.point
-    path, filename = request.measurement.path, request.measurement.filename
-    edges = request.bins.edges
-    mask = request.bins.mask
-
-    key = request_key(request)
-    if (key, "binned") not in CACHE:
-        print("processing events")
-        nexus = data_cache.load_nexus(filename, datapath=path)
-        entry = list(nexus.values())[0]
-        binned = {}
-        for z, detector in (("front", "FL"), ("middle", "ML")):
-            #print("fetching")
-            eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
-            eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
-            #print("loading")
-            events = rebin_vsans_old.VSANSEvents(eventpath)
-            # TODO: correct for time of flight
-            # TODO: elide events in mask
-            #print("binning")
-            partial_counts, _ = events.rebin(edges)
-            for xy, data in partial_counts.items():
-                binned[f"{z} {xy}"] = data
-        CACHE[key, "binned"] = binned
-
-    if (key, "summed") not in CACHE:
-        print("accumulating events")
-        binned = CACHE[key, "binned"]
-        summed = {}
-        for detector, data in binned.items():
-            total = np.sum(np.sum(data, axis=0), axis=0)
-            summed[detector] = total
-        CACHE[key, "summed"] = summed
-
-    summed = CACHE[key, "summed"]
+    summed = bin_by_time(request.measurement, request.bins, summary=True)
     # TODO: check the last edge is the correct length when it is truncated
+    # TODO: duration is incorrect with masking and/or incomplete bins
+    edges = request.bins.edges
     duration = (edges[1:] - edges[:-1])
     devices = {}
     monitor = None
@@ -157,8 +122,73 @@ def get_summary_time(request: models.SummaryTimeRequest):
     return reply
 
 @app.post("/timebin/frame/{index}")
-def get_timebin_frame(index: int, measurement: SummaryTimeRequest):
-    pass
+def get_timebin_frame(index: int, request: models.SummaryTimeRequest):
+    print("loading")
+    counts = bin_by_time(request.measurement, request.bins, summary=False)
+    print("loaded")
+    for k, v in counts.items():
+        print(k, v.shape)
+    frames = {k: v[..., index:index+1] for k, v in counts.items()}
+    for k, v in frames.items():
+        print(k, v.shape)
+    reply = models.FrameReply(
+        frames=frames,
+    )
+    return reply
+
+@app.post("/timebin/frame/{start}-{end}")
+def get_timebin_frame_range(start: int, end: int, request: models.SummaryTimeRequest):
+    counts = bin_by_time(request.measurement, request.bins, summary=False)
+    frames = {k: v[..., start:end] for k, v in counts.items()}
+    reply = models.FrameReply(
+        frames=frames,
+    )
+    return reply
+
+def bin_by_time(measurement, bins, summary=False):
+    point = measurement.point
+    path, filename = measurement.path, measurement.filename
+    edges = bins.edges
+    mask = bins.mask
+
+    key = (request_key(measurement), request_key(bins))
+    binned_key = (*key, "binned")
+    summed_key = (*key, "summed")
+    if binned_key not in CACHE:
+        print("processing events")
+        nexus = data_cache.load_nexus(filename, datapath=path)
+        entry = list(nexus.values())[0]
+        binned = {}
+        for z, detector in (("front", "FL"), ("middle", "ML")):
+            print("fetching", detector)
+            eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
+            eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
+            print("loading", detector)
+            events = rebin_vsans_old.VSANSEvents(eventpath)
+            # TODO: correct for time of flight
+            # TODO: elide events in mask
+            print("binning", detector)
+            partial_counts, _ = events.rebin(edges)
+            for xy, data in partial_counts.items():
+                binned[f"{z} {xy}"] = data
+        CACHE[binned_key] = binned
+    else:
+        print("cache hit", binned_key)
+
+    if not summary:
+        return CACHE[binned_key]
+
+    if summed_key not in CACHE:
+        print("accumulating events")
+        binned = CACHE[binned_key]
+        summed = {}
+        for detector, data in binned.items():
+            total = np.sum(np.sum(data, axis=0), axis=0)
+            summed[detector] = total
+        CACHE[summed_key] = summed
+    else:
+        print("cache hit", summed_key)
+    return CACHE[summed_key]
 
 def request_key(request):
     data = request.model_dump_json()
@@ -166,7 +196,7 @@ def request_key(request):
     return digest
 
 def demo():
-    import client
+    from . import client
     filename = "sans68869.nxs.ngv"
     measurement = models.Measurement(filename=filename)
     #data_cache.load_nexus(request.filename, datapath=request.path)
@@ -177,6 +207,12 @@ def demo():
     request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
     summary = get_summary_time(request)
     print("summary", summary)
+    r_one = get_timebin_frame(250, request)
+    print("frame", r_one)
+    r_many = get_timebin_frame_range(250, 252, request)
+    detector = "front left"
+    print(r_one.frames[detector].shape, r_many.frames[detector].shape)
+    assert (r_one.frames[detector][...,0] == r_many.frames[detector][..., 0]).all()
 
 
 if __name__ == "__main__":
