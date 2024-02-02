@@ -7,14 +7,27 @@ from fastapi.responses import Response, StreamingResponse
 #from dateutil.parser import isoparser
 import numpy as np
 import h5py
+import diskcache
 
 from . import models
 from . import data_cache
 from . import rebin_vsans_old
 
+CACHE = None
+CACHE_PATH = "/tmp/event-processing"
+CACHE_SIZE = int(100e9) 
 app = FastAPI()
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
+
+def start_cache():
+    cache = diskcache.Cache(
+        CACHE_PATH, 
+        size_limit=CACHE_SIZE,
+        eviction_policy='least-recently-used',
+        )
+    return cache
+CACHE = start_cache()
 
 _ = '''
 from typing import Dict, Literal, Optional, Sequence, Tuple, Union
@@ -93,35 +106,42 @@ def get_metadata(request: models.Measurement):
 def get_summary_time(request: models.SummaryTimeRequest):
     #print("summary_time", request)
 
+
     point = request.measurement.point
     path, filename = request.measurement.path, request.measurement.filename
     edges = request.bins.edges
     mask = request.bins.mask
 
-    nexus = data_cache.load_nexus(filename, datapath=path)
-    entry = list(nexus.values())[0]
+    key = request_key(request)
+    if (key, "binned") not in CACHE:
+        print("processing events")
+        nexus = data_cache.load_nexus(filename, datapath=path)
+        entry = list(nexus.values())[0]
+        binned = {}
+        for z, detector in (("front", "FL"), ("middle", "ML")):
+            #print("fetching")
+            eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
+            eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
+            #print("loading")
+            events = rebin_vsans_old.VSANSEvents(eventpath)
+            # TODO: correct for time of flight
+            # TODO: elide events in mask
+            #print("binning")
+            partial_counts, _ = events.rebin(edges)
+            for xy, data in partial_counts.items():
+                binned[f"{z} {xy}"] = data
+        CACHE[key, "binned"] = binned
 
-    # TODO: memoize counts based on request
-    counts = {}
-    for z, detector in (("front", "FL"), ("middle", "ML")):
-        #print("fetching")
-        eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
-        eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
-        #print("loading")
-        events = rebin_vsans_old.VSANSEvents(eventpath)
-        # TODO: correct for time of flight
-        # TODO: elide events in mask
-        #print("binning")
-        partial_counts, _ = events.rebin(edges)
-        for xy, data in partial_counts.items():
-            counts[f"{z} {xy}"] = data
+    if (key, "summed") not in CACHE:
+        print("accumulating events")
+        binned = CACHE[key, "binned"]
+        summed = {}
+        for detector, data in binned.items():
+            total = np.sum(np.sum(data, axis=0), axis=0)
+            summed[detector] = total
+        CACHE[key, "summed"] = summed
 
-    # summarize
-    #print("summing")
-    for detector, data in counts.items():
-        integrated = np.sum(np.sum(data, axis=0), axis=0)
-        counts[detector] = integrated
-
+    summed = CACHE[key, "summed"]
     # TODO: check the last edge is the correct length when it is truncated
     duration = (edges[1:] - edges[:-1])
     devices = {}
@@ -130,11 +150,20 @@ def get_summary_time(request: models.SummaryTimeRequest):
         measurement=request.measurement,
         bins=request.bins,
         duration=duration,
-        counts=counts,
+        counts=summed,
         monitor=monitor,
         devices=devices,
     )
     return reply
+
+@app.post("/timebin/frame/{index}")
+def get_timebin_frame(index: int, measurement: SummaryTimeRequest):
+    pass
+
+def request_key(request):
+    data = request.model_dump_json()
+    digest = hashlib.sha1(data.encode('utf-8')).hexdigest()
+    return digest
 
 def demo():
     import client

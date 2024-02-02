@@ -11,7 +11,9 @@ dependencies = [
     "h5py",
     "msgpack",
     "numpy",
-    "requests"
+    "requests",
+    "plotly",
+    "nicegui"
 ]
 
 [project.optional-dependencies]
