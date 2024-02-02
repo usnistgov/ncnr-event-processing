@@ -53,6 +53,8 @@ def get_summary(metadata, bins):
     if bins.mode == "time":
         assert isinstance(bins, models.TimeBins)
         request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
+    else:
+        raise NotImplementedError('slicing other than time not yet implemented')
     reply = post(f"summary_{bins.mode}", request)
     return models.SummaryReply(**reply)
 
@@ -67,7 +69,7 @@ def get_frames(metadata, bins, start=0, stop=1):
         request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
     #reply = post(f"timebin/frame/{start}-{stop}", request)
     reply = post(f"timebin/frame/{start}", request)
-    return reply
+    return models.FrameReply(**reply)
 
 def get_nexus(metadata, bins):
     request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
@@ -171,6 +173,16 @@ def demo():
     hdf_bytes = base64.b64decode(hdf.base64_data)
     with open('/tmp/client_sample.hdf', 'wb') as fd:
         fd.write(hdf_bytes)
+
+def test_frame():
+    filename = "sans68869.nxs.ngv"
+    path = "vsans/202009/27861/data"
+    metadata = get_metadata(filename, path=path)
+    #print("metadata", metadata)
+    bins = time_linbins(metadata, interval=3.6)
+    summary = get_summary(metadata, bins)
+    frames = get_frames(metadata, bins, 100, 101)
+    return frames
 
 if __name__ == '__main__':
     demo()
