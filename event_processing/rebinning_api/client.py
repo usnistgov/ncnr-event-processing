@@ -1,3 +1,4 @@
+import base64
 from dataclasses import asdict
 
 import requests
@@ -69,8 +70,9 @@ def get_frames(metadata, bins, start=0, stop=1):
     return reply
 
 def get_nexus(metadata, bins):
-    reply = post("timebin/nexus", metadata.measurement) # point number ignored
-    return reply
+    request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
+    reply = post("timebin/nexus", request) # point number ignored
+    return models.NexusReply(**reply)
 
 
 def time_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=0):
@@ -166,8 +168,9 @@ def demo():
     #frames = get_frames(metadata, bins, 0, 2)
     #print("frames", frames)
     hdf = get_nexus(metadata, bins)
+    hdf_bytes = base64.b64decode(hdf.base64_data)
     with open('/tmp/client_sample.hdf', 'wb') as fd:
-        fd.write(hdf.data)
+        fd.write(hdf_bytes)
 
 if __name__ == '__main__':
     demo()

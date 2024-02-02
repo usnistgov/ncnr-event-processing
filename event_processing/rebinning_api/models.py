@@ -248,7 +248,7 @@ class FrameReply(BaseModel):
     data: dict[str, array]
 
 class NexusReply(BaseModel):
-    data: bytes
+    base64_data: str
 
 class LogRequest(BaseModel):
     """

@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import io
 
@@ -18,7 +19,7 @@ CACHE = None
 CACHE_PATH = "/tmp/event-processing"
 CACHE_SIZE = int(100e9) 
 app = FastAPI()
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
 
 def start_cache():
@@ -175,7 +176,7 @@ def get_timebin_nexus(request: models.SummaryTimeRequest):
 
     data = bio.getvalue()
     reply = models.NexusReply(
-        data=data,
+        base64_data=base64.b64encode(data),
     )
     return reply
 
@@ -324,7 +325,7 @@ def demo():
     assert (r_one.data[detector][...,0] == r_many.data[detector][..., 0]).all()
     hdf = get_timebin_nexus(request)
     with open('/tmp/sample.hdf', 'wb') as fd:
-        fd.write(hdf.data)
+        fd.write(base64.b64decode(hdf.base64_data))
 
 if __name__ == "__main__":
     demo()
