@@ -2,10 +2,11 @@ from dataclasses import dataclass, asdict
 import json
 from typing import Optional
 from nicegui import ui
+import numpy as np
 import plotly.graph_objects as go
 import requests
 
-from event_processing.rebinning_api import client as binning_client
+from event_processing.rebinning_api import client as binning_client, models as binning_models
 
 all_instruments = requests.get(url="https://ncnr.nist.gov/ncnrdata/metadata/api/v1/instruments").json()
 available_instrument_names = [
@@ -77,6 +78,12 @@ def index():
         },
         'selection': '',
         'selection_path': '',
+    }
+
+    binning_data = {
+        'bins': None,
+        'metadata': None,
+        'last_frame': None
     }
 
     @ui.refreshable
@@ -352,10 +359,78 @@ def index():
                 localdir.bind_value_from(datafiles_data, 'selection_path')
 
                 ui.button('Get Counts vs. Time', on_click=lambda: update_summary())
-            
+
             summary_fig = go.Figure()
-            summary_fig.update_layout(title="Time Summary", margin=dict(l=0, r=0, t=30, b=0))
-            summary_plot = ui.plotly(summary_fig).classes('w-full h-full')
+            summary_fig.update_layout(
+                title="Time Summary",
+                margin=dict(l=0, r=0, t=30, b=0),
+                xaxis = dict(title="elapsed time (seconds)", showline=True, mirror=True, showgrid=True),
+                yaxis = dict(title="total counts", showline=True, mirror=True, showgrid=True),
+                template='simple_white',
+            )
+            frame_fig = go.Figure()
+            frame_fig.update_layout(
+                title = "Frame snapshot",
+                xaxis = dict(showline=True, mirror=True, showgrid=True),
+                yaxis = dict(showline=True, mirror=True, showgrid=True, scaleanchor='x', scaleratio=1),
+                template='simple_white',
+            )
+            # print(frame_fig.to_plotly_json())
+
+            
+
+            def handle_click(event):
+                # show frame!
+                args = event.args
+                points = args.pop('points', None)
+                if len(points) > 0:
+                    point = points[0]
+                    data = point.pop('data', {})
+                    name = data.pop('name', None)
+                    # curveNumber = point['curveNumber']
+                    point_number = point['pointNumber']
+                    # pointIndex = point['pointIndex']
+                    # print(dict(curveNumber=curveNumber, pointNumber=point_number, pointIndex=pointIndex, name=name))
+                    print('handling click...', name, point_number)
+                    show_frame(name, point_number)
+
+
+            # with ui.splitter() as splitter:
+            #     with splitter.before as summary_plot_space:
+            #         summary_plot = ui.plotly(summary_fig).classes("flex-auto")
+            #         # summary_plot.on('plotly_doubleclick', lambda event: print(event))
+            #         summary_plot.on('plotly_click', handle_click)
+            #     with splitter.after:
+            #         frame_plot = ui.plotly(frame_fig)
+
+            with ui.row():
+                with ui.column() as summary_plot_space:
+                    summary_plot = ui.plotly(summary_fig).classes("flex-auto")
+                    summary_plot.on('plotly_click', handle_click)
+                with ui.column() as frame_plot_space:
+                    frame_plot = ui.plotly(frame_fig)
+
+
+            def show_frame(det_name: str, point_number: int):
+                print(det_name, point_number)
+                bins = binning_data['bins']
+                metadata = binning_data['metadata']
+                last_frame = binning_data['last_frame']
+                if point_number == last_frame:
+                    return
+                binning_data['last_frame'] = point_number
+                frames = binning_client.get_frames(metadata, bins, start=point_number, stop=point_number+1)
+                start_time = bins.edges[point_number]
+                end_time = bins.edges[point_number + 1]
+                data = frames.data[det_name]
+                x = np.arange(data.shape[0])
+                y = np.arange(data.shape[1])
+                trace = go.Heatmap(x=x, y=y, z=data[:,:,0])
+                print(data.shape, data.dtype, data[:,:,0])
+                frame_fig.data = []
+                frame_fig.add_traces([trace])
+                frame_fig.update_layout(title = f'Frame snapshot: {det_name} between times {start_time} and {end_time}')
+                frame_plot.update()
 
             def update_summary():
                 filename = datafiles_data.get("selection", None)
@@ -363,31 +438,31 @@ def index():
                 if not filename or not path:
                     ui.notify("file or path is undefined... can't show summary")
                 metadata = binning_client.get_metadata(filename, path=path)
+                binning_data['metadata'] = metadata
                 num_points = 1000
                 duration = metadata.duration
                 interval = duration / num_points
                 bins = binning_client.time_linbins(metadata, interval=interval)
+                binning_data['bins'] = bins
                 summary = binning_client.get_summary(metadata, bins)
                 
                 time_bin_edges = summary.bins.edges
                 time_bin_centers = (time_bin_edges[1:] + time_bin_edges[:-1])/2
                 total_counts = None
+                summary_fig.data = []
+                traces = []
                 for detname in summary.counts:
                     det_counts = summary.counts[detname]
                     if total_counts is None:
                         total_counts = det_counts.copy()
                     else:
                         total_counts += det_counts
+                    traces.append(go.Scatter(x=time_bin_centers, y=det_counts, name=detname))
 
-                trace = go.Scatter(x=time_bin_centers, y=total_counts, name="total")
-                summary_fig.data = []
-                summary_fig.add_trace(trace)
-                summary_fig.update_layout(
-                    xaxis_title="elapsed time (seconds)",
-                    yaxis_title="total counts",
-                )
+                traces.append(go.Scatter(x=time_bin_centers, y=total_counts, name="total"))
+                summary_fig.add_traces(traces)
+                print("updating plot")
                 summary_plot.update()
-                
                 
                 
 ui.run(favicon=FAVICON)
