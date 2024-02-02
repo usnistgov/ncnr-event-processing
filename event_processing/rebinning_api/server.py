@@ -1,4 +1,5 @@
 import hashlib
+import io
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
@@ -71,34 +72,37 @@ def unbundle(reply):
 
 @app.post("/metadata")
 def get_metadata(request: models.Measurement):
-    #print("metadata", type(request), request)
     point = request.point
-    path, filename = request.path, request.filename
-    nexus = data_cache.load_nexus(filename, datapath=path)
-
-    # TODO: what if there are multiple entries?
-    entry = list(nexus.values())[0]
-    timestamp = entry['start_time'][()][0].decode('ascii')
-    duration = float(entry['control/count_time'][()][point])
-    # TODO: find active detectors
-    detectors = [
-        f"{z} {xy}" for z in "front middle".split()
-        for xy in "bottom left right top".split()] # + ["back"]
-    #detectors = [f"detector_{k}" for k in 'FB FL FR FT MB ML MR MT'.split()] # + ["detector_B"]
+    entry = open_nexus_entry(request)
+    #print("entry", entry, entry.parent)
+    # Go up to the root to get the other NXentry items in the file.
+    entries = nexus_entries(entry.parent)
+    timestamp = entry['start_time'][0].decode('ascii')
+    duration = float(entry['control/count_time'][point])
+    numpoints = entry['DAS_logs/trajectory/liveScanLength'][0]
+    replacement = nexus_detector_replacement(entry)
+    #print("detector data links", replacement)
+    detectors = list(replacement.keys())
     # TODO: determine mode for sweep device and triggers
     event_mode = 'time' # not written yet... this is the default
+    trigger_interval = 0.0
     # TODO: lookup sweep controls from nexus file
+    logs = {}
+    sweep = None
+
     reply = models.MetadataReply(
         measurement=request,
-        numpoints=1,
+        entries=entries,
+        numpoints=numpoints,
+        # TODO: who is parsing the timestamp ??
         # timestamp=isoparser().isoparse(timestamp),
         timestamp=timestamp,
         duration=duration,
-        trigger_interval=0.0,
+        trigger_interval=trigger_interval,
         detectors=detectors,
-        logs={}, # No temperature logs in initial dataset
+        logs=logs,
         event_mode=event_mode,
-        sweep=None,
+        sweep=sweep,
     )
     return reply
 
@@ -123,14 +127,12 @@ def get_summary_time(request: models.SummaryTimeRequest):
 
 @app.post("/timebin/frame/{index}")
 def get_timebin_frame(index: int, request: models.SummaryTimeRequest):
-    print("loading")
+    #print("loading")
     counts = bin_by_time(request.measurement, request.bins, summary=False)
-    print("loaded")
-    for k, v in counts.items():
-        print(k, v.shape)
+    #print("loaded")
+    #for k, v in counts.items(): print(k, v.shape)
     frames = {k: v[..., index:index+1] for k, v in counts.items()}
-    for k, v in frames.items():
-        print(k, v.shape)
+    #for k, v in frames.items(): print(k, v.shape)
     reply = models.FrameReply(
         frames=frames,
     )
@@ -145,19 +147,122 @@ def get_timebin_frame_range(start: int, end: int, request: models.SummaryTimeReq
     )
     return reply
 
-def bin_by_time(measurement, bins, summary=False):
+@app.post("/timebin/nexus")
+def get_timebin_nexus(request: models.SummaryTimeRequest):
+    # TODO: support files with different binning at each point
+    # Could split points across files or across entries within a file
+    # TODO: maybe provide "explode" option to split each bin to a different file
+    # TODO: check that there is only one entry with one point
+    entry = open_nexus_entry(request.measurement)
+    counts = bin_by_time(request.measurement, request.bins, summary=False)
+    #print("counts", counts)
+    replacement_target = nexus_detector_replacement(entry)
+    replacement = {
+        v: counts[k] for k, v in replacement_target.items()
+    }
+
+    bio = io.BytesIO()
+    with h5py.File(bio, 'w') as target:
+        hdf_copy(entry.parent, target, replacement)
+        # TODO: Consider storing the binning info in each detector
+        # TODO: Add the appropriate NeXus metadata to the fields
+        # TODO: Add masking info, etc.
+        control = target[entry.name]['control']
+        edges = control.create_dataset('bin_edges', data=request.bins.edges)
+        edges.attrs['units'] = 'seconds'
+        edges.attrs['long_name'] = 'bin edges for time binned data'
+        control.create_dataset('bin_mode', data='time')
+
+    data = bio.getvalue()
+    reply = models.NexusReply(
+        data=data,
+    )
+    return reply
+
+def open_nexus_entry(measurement: models.Measurement):
     point = measurement.point
     path, filename = measurement.path, measurement.filename
-    edges = bins.edges
-    mask = bins.mask
+    entry_number = measurement.entry
 
+    nexus = data_cache.load_nexus(filename, datapath=path)
+    entries = nexus_entries(nexus)
+    #print("entries", entries)
+    entry_name = entries[entry_number]
+    return nexus[entry_name]
+
+def nexus_entries(nexus):
+    """List of nexus entries"""
+    #print({k: list(v.attrs.items()) for k, v in nexus.items()})
+    return list(k for k, v in nexus.items() if v.attrs['NX_class'] == 'NXentry')
+
+def nexus_detector_replacement(entry):
+    """
+    Determine the DAS_logs location of each detector data element.
+    """
+    #print("instrument", sorted(entry["instrument"].items()))
+    # TODO: check that the linked detector has stored data
+    # that may be enough to verify that it is active
+    detectors = {
+        name: group["data"].attrs["target"]
+        for name, group in sorted(entry["instrument"].items())
+        if group.attrs.get('NX_class', None) == 'NXdetector'
+        and "data" in group
+        and "target" in group["data"].attrs
+    }
+    #print("detectors", detectors)
+    return detectors
+
+def hdf_copy(source, target, replacement):
+    # type: (h5py.Group, str) -> h5py.File
+    """
+    Copy an entry and all sub-entries from source to a destination.
+
+    *source* is an open node in an hdf file.
+
+    *target* is an hdf file opened for writing.
+
+    *replacement* is a dictionary of replacement fields.
+    """
+    links = _hdf_copy_internal(source, target, replacement)
+    for link_to, link_from in sorted(links):
+        #print("linking", link_from, link_to)
+        target[link_to] = target[link_from]
+
+def _hdf_copy_internal(root, h5file, replacement):
+    # type: (h5py.Group, h5py.Group, List[Tuple[str, str]]) -> None
+    links = []
+    # print(">>> group copy", root.name, "\n   ", "\n    ".join(sorted(root.keys())))
+    for item_name, item in sorted(root.items()):
+        item_path = f"{root.name}/{item_name}" if root.name != "/" else f"/{item_name}"
+        #print("joining", root.name, item_name, "as", item_path)
+        #item_path = posixpath.join(root.name, item_name)
+        if 'target' in item.attrs and item.attrs['target'] != item_path:
+            # print("linking", item_path, item.name)
+            links.append((item_path, item.attrs['target']))
+        elif hasattr(item, 'dtype'):
+            data = replacement.get(item_path, item[()])
+            # print("copying", item_path, item.name)
+            node = h5file.create_dataset(item.name, data=data)
+            attrs = dict(item.attrs)
+            node.attrs.update(item.attrs)
+        else:
+            # print("making", item_path, item.name)
+            # Hope that it is a group...
+            node = h5file.create_group(item.name)
+            node.attrs.update(item.attrs)
+            links.extend(_hdf_copy_internal(item, h5file, replacement))
+    return links
+
+def bin_by_time(measurement, bins, summary=False):
     key = (request_key(measurement), request_key(bins))
     binned_key = (*key, "binned")
     summed_key = (*key, "summed")
     if binned_key not in CACHE:
-        print("processing events")
-        nexus = data_cache.load_nexus(filename, datapath=path)
-        entry = list(nexus.values())[0]
+        #print("processing events")
+        entry = open_nexus_entry(measurement)
+        #point = measurement.point # ignored in vsans rebin old
+        edges = bins.edges
+        #mask = bins.mask # ignored in vsans rebin old
         binned = {}
         for z, detector in (("front", "FL"), ("middle", "ML")):
             print("fetching", detector)
@@ -170,10 +275,11 @@ def bin_by_time(measurement, bins, summary=False):
             print("binning", detector)
             partial_counts, _ = events.rebin(edges)
             for xy, data in partial_counts.items():
-                binned[f"{z} {xy}"] = data
+                # form detector_FB, etc. from first letter of names
+                name = f"detector_{z[0].upper()}{xy[0].upper()}"
+                binned[name] = data
         CACHE[binned_key] = binned
-    else:
-        print("cache hit", binned_key)
+    #else: print("cache hit", binned_key)
 
     if not summary:
         return CACHE[binned_key]
@@ -186,8 +292,7 @@ def bin_by_time(measurement, bins, summary=False):
             total = np.sum(np.sum(data, axis=0), axis=0)
             summed[detector] = total
         CACHE[summed_key] = summed
-    else:
-        print("cache hit", summed_key)
+    #else: print("cache hit", summed_key)
     return CACHE[summed_key]
 
 def request_key(request):
@@ -195,25 +300,31 @@ def request_key(request):
     digest = hashlib.sha1(data.encode('utf-8')).hexdigest()
     return digest
 
+# TODO: how do we clear the cache when upgrading the application?
+
 def demo():
     from . import client
+    #CACHE.clear()
     filename = "sans68869.nxs.ngv"
     measurement = models.Measurement(filename=filename)
     #data_cache.load_nexus(request.filename, datapath=request.path)
     #print(get_metadata(measurement).body)
     metadata = get_metadata(measurement)
-    print("metadata", metadata)
-    bins = client.time_linbins(metadata)
+    #print("metadata", metadata)
+    bins = client.time_linbins(metadata, interval=5)
     request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
     summary = get_summary_time(request)
-    print("summary", summary)
-    r_one = get_timebin_frame(250, request)
-    print("frame", r_one)
-    r_many = get_timebin_frame_range(250, 252, request)
-    detector = "front left"
-    print(r_one.frames[detector].shape, r_many.frames[detector].shape)
+    #print("summary", summary)
+    index = np.searchsorted(bins.edges, 500.)
+    r_one = get_timebin_frame(index, request)
+    #print("frame", index, {k: v.shape for k, v in r_one.frames.items()})
+    r_many = get_timebin_frame_range(index, index+2, request)
+    detector = "detector_FL"
+    #print(r_one.frames[detector].shape, r_many.frames[detector].shape)
     assert (r_one.frames[detector][...,0] == r_many.frames[detector][..., 0]).all()
-
+    hdf = get_timebin_nexus(request)
+    with open('/tmp/sample.hdf', 'wb') as fd:
+        fd.write(hdf.data)
 
 if __name__ == "__main__":
     demo()

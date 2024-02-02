@@ -145,6 +145,11 @@ class Measurement(BaseModel):
     #: Path to the data directory relative to data root. If None, then search
     #: for the file in the experiment metadata service.
     path: str | None = None
+    # Note: entry is specified as an integer rather than a string so that
+    # caching works transparently.
+    #: Entry within the nexus file, if there are multiple. Similar to points
+    #: within an entry, this defaults to the first entry in the file.
+    entry: int = 0
     #: For scan measurements, which point number in the scan. [summary, frame, metadata, trigger]
     point: int = 0
     #: Binning strategy [summary, frame]
@@ -162,7 +167,9 @@ class MetadataReply(BaseModel):
     Metadata available in the NeXus file.
     """
     measurement: Measurement
-    #: Number of points in the scan
+    #: List of entries in the file
+    entries: list[str]
+    #: Number of points in the selected entry
     numpoints: int
     # TODO: python datetime object? ISO8601? unix epoch? epics epoch? windows epoch?
     # TODO: Do we need file time separate from point time?
@@ -241,7 +248,6 @@ class FrameReply(BaseModel):
     frames: dict[str, array]
 
 class NexusReply(BaseModel):
-    measurement: Measurement
     data: bytes
 
 class LogRequest(BaseModel):
