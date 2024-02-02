@@ -2,7 +2,10 @@ from dataclasses import dataclass, asdict
 import json
 from typing import Optional
 from nicegui import ui
+import plotly.graph_objects as go
 import requests
+
+from event_processing.rebinning_api import client as binning_client
 
 all_instruments = requests.get(url="https://ncnr.nist.gov/ncnrdata/metadata/api/v1/instruments").json()
 available_instrument_names = [
@@ -348,5 +351,43 @@ def index():
                 localdir = ui.input(label='Path').props('readonly')
                 localdir.bind_value_from(datafiles_data, 'selection_path')
 
+                ui.button('Get Counts vs. Time', on_click=lambda: update_summary())
+            
+            summary_fig = go.Figure()
+            summary_fig.update_layout(title="Time Summary", margin=dict(l=0, r=0, t=30, b=0))
+            summary_plot = ui.plotly(summary_fig).classes('w-full h-full')
 
+            def update_summary():
+                filename = datafiles_data.get("selection", None)
+                path = datafiles_data.get("selection_path", None)
+                if not filename or not path:
+                    ui.notify("file or path is undefined... can't show summary")
+                metadata = binning_client.get_metadata(filename, path=path)
+                num_points = 1000
+                duration = metadata.duration
+                interval = duration / num_points
+                bins = binning_client.time_linbins(metadata, interval=interval)
+                summary = binning_client.get_summary(metadata, bins)
+                
+                time_bin_edges = summary.bins.edges
+                time_bin_centers = (time_bin_edges[1:] + time_bin_edges[:-1])/2
+                total_counts = None
+                for detname in summary.counts:
+                    det_counts = summary.counts[detname]
+                    if total_counts is None:
+                        total_counts = det_counts.copy()
+                    else:
+                        total_counts += det_counts
+
+                trace = go.Scatter(x=time_bin_centers, y=total_counts, name="total")
+                summary_fig.data = []
+                summary_fig.add_trace(trace)
+                summary_fig.update_layout(
+                    xaxis_title="elapsed time (seconds)",
+                    yaxis_title="total counts",
+                )
+                summary_plot.update()
+                
+                
+                
 ui.run(favicon=FAVICON)
