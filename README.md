@@ -80,7 +80,7 @@ python -m event_processing.rebinning_api.client
 
 You will sometimes want to clear out the cache during development:
 ```sh
-python -m event_processing.rebinning_api.server check
+python -m event_processing.rebinning_api.server clear
 ```
 Generally this happens automatically when you bump server.CACHE_VERSION,
 but you may want to trigger it manually if you are playing with code timing.
