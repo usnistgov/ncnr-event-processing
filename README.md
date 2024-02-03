@@ -57,12 +57,6 @@ Use pip installation for end user tools
 pip install https://gitlab.nist.gov/gitlab/ncnrdata/event-processing.git
 ```
 
-If you upgrade the server you should clear any cached data otherwise you may
-get confused results or a crashed server:
-```sh
-python -m event_processing.rebinning_api.server clear
-```
-
 ## Usage
 
 To run the webservice and gui
@@ -84,10 +78,12 @@ python -m event_processing.rebinning_api.server check
 python -m event_processing.rebinning_api.client
 ```
 
-You will sometimes have to clear out the cache during development:
+You will sometimes want to clear out the cache during development:
 ```sh
 python -m event_processing.rebinning_api.server check
 ```
+Generally this happens automatically when you bump server.CACHE_VERSION,
+but you may want to trigger it manually if you are playing with code timing.
 
 ## Authors and acknowledgment
 Paul Kienzle, Brian Maranville

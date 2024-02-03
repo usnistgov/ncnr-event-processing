@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import io
+from pathlib import Path
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
@@ -17,6 +19,7 @@ from . import rebin_vsans_old
 
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
+CACHE_VERSION = "0.2"
 CACHE_SIZE = int(100e9) 
 app = FastAPI()
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -28,6 +31,17 @@ def start_cache():
         size_limit=CACHE_SIZE,
         eviction_policy='least-recently-used',
         )
+
+    version_file = Path(CACHE_PATH) / "version.txt"
+    if version_file.exists():
+        disk_version = version_file.read_text()
+        if disk_version != CACHE_VERSION:
+            logging.info(f"Updating cache from {disk_version} to {CACHE_VERSION}")
+            cache.clear()
+            version_file.write_text(CACHE_VERSION)
+    else:
+        cache.clear() # CRUFT: harmless, but clears out Brian's cache the first time
+        version_file.write_text(CACHE_VERSION)
     return cache
 CACHE = start_cache()
 
@@ -380,6 +394,7 @@ def demo():
     with open('/tmp/sample.hdf', 'wb') as fd:
         fd.write(base64.b64decode(hdf.base64_data))
 
+# TODO: cache a version number, clearing the cache if there is a version mismatch
 def main():
     import sys
     # TODO: admit early that we need an options parser
@@ -391,9 +406,10 @@ def main():
         print("""
 Usage: server clear|check
 
-clear: empties any caches associated with the data. You will want to
-    do this on the production server before deploying a new version.
-check: runs some simple event processing to make sure that the pieces
+clear: Empties any caches associated with the data. This should happen
+    automatically if you bump server.CACHE_VERSION to a new value, but you
+    may still want to clear the version manually when e.g., testing speed.
+check: Runs some simple event processing to make sure that the pieces
     work together. This is a development tool acting as a poor substitute
     for a proper test harness.
 
