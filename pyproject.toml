@@ -13,7 +13,7 @@ dependencies = [
     "numpy",
     "requests",
     "plotly",
-    "nicegui"
+    "nicegui",
     "kafka-python",
     "fastavro",
     "avro",
