@@ -52,18 +52,24 @@ Tools for processing and visualizing event streams from NCNR instruments
 
 ## Installation
 
-pip installation for end user tools
+Use pip installation for end user tools
 ```sh
 pip install https://gitlab.nist.gov/gitlab/ncnrdata/event-processing.git
 ```
+
+If you upgrade the server you should clear any cached data otherwise you may
+get confused results or a crashed server:
+```sh
+python -m event_processing.rebinning_api.server clear
+```
+
+## Usage
+
 To run the webservice and gui
 ```sh
 uvicorn event_processing.rebinning_api.server:app
 python -m event_processing.rebinning_client.demo
 ```
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
 
 ## Contributing
 
@@ -74,8 +80,13 @@ pip install -e event-processing
 ```
 To run some basic tests:
 ```sh
-python -m event_processing.rebinning_api.server
+python -m event_processing.rebinning_api.server check
 python -m event_processing.rebinning_api.client
+```
+
+You will sometimes have to clear out the cache during development:
+```sh
+python -m event_processing.rebinning_api.server check
 ```
 
 ## Authors and acknowledgment

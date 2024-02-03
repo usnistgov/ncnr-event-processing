@@ -71,6 +71,7 @@ def unbundle(reply):
     return serial.loads(data)
 '''
 
+# ===================================
 @app.post("/metadata")
 def get_metadata(request: models.Measurement):
     point = request.point
@@ -107,18 +108,19 @@ def get_metadata(request: models.Measurement):
     )
     return reply
 
+# ===================================
 @app.post("/summary_time")
 def get_summary_time(request: models.SummaryTimeRequest):
-    summed = bin_by_time(request.measurement, request.bins, summary=True)
-    # TODO: check the last edge is the correct length when it is truncated
-    # TODO: duration is incorrect with masking and/or incomplete bins
-    edges = request.bins.edges
-    duration = (edges[1:] - edges[:-1])
+    return get_summary(request.measurement, request.bins)
+
+def get_summary(measurement, bins):
+    summed, duration = bin_events(measurement, bins, summary=True)
+    # TODO: need duration from other event binners
     devices = {}
     monitor = None
     reply = models.SummaryReply(
-        measurement=request.measurement,
-        bins=request.bins,
+        measurement=measurement,
+        bins=bins,
         duration=duration,
         counts=summed,
         monitor=monitor,
@@ -126,54 +128,62 @@ def get_summary_time(request: models.SummaryTimeRequest):
     )
     return reply
 
+# ===================================
 @app.post("/timebin/frame/{index}")
 def get_timebin_frame(index: int, request: models.SummaryTimeRequest):
-    #print("loading")
-    counts = bin_by_time(request.measurement, request.bins, summary=False)
-    #print("loaded")
-    #for k, v in counts.items(): print(k, v.shape)
-    data = {k: v[..., index:index+1] for k, v in counts.items()}
-    #for k, v in frames.items(): print(k, v.shape)
-    reply = models.FrameReply(
-        data=data,
-    )
-    return reply
+    return get_frame_range(request.measurement, request.bins, index, index+1)
 
 @app.post("/timebin/frame/{start}-{end}")
 def get_timebin_frame_range(start: int, end: int, request: models.SummaryTimeRequest):
-    counts = bin_by_time(request.measurement, request.bins, summary=False)
+    return get_frame_range(request.measurement, request.bins, start, end)
+
+def get_frame_range(measurement, bins, start, end):
+    counts, duration = bin_events(measurement, bins, summary=False)
     data = {k: v[..., start:end] for k, v in counts.items()}
     reply = models.FrameReply(
         data=data,
     )
     return reply
 
+# ===================================
 @app.post("/timebin/nexus")
 def get_timebin_nexus(request: models.SummaryTimeRequest):
+    return get_nexus(request.measurement, request.bins)
+
+def get_nexus(measurement, bins):
+    """
+    Helper for nexus writer endpoints, which takes the binned detectors, etc.
+    and produces an updated nexus file.
+    """
     # TODO: support files with different binning at each point
     # Could split points across files or across entries within a file
     # TODO: maybe provide "explode" option to split each bin to a different file
     # TODO: check that there is only one entry with one point
-    entry = open_nexus_entry(request.measurement)
-    counts = bin_by_time(request.measurement, request.bins, summary=False)
-    #print("counts", counts)
-    replacement_target = nexus_detector_replacement(entry)
-    replacement = {
-        v: counts[k] for k, v in replacement_target.items()
-    }
+    # TODO: replace monitor, and any devices that are binned
+    counts, duration = bin_events(measurement, bins, summary=False)
+    entry = open_nexus_entry(measurement)
+    try:
+        #print("counts", counts)
+        replacement_target = nexus_detector_replacement(entry)
+        replacement = {
+            v: counts[k] for k, v in replacement_target.items()
+        }
+        count_time = entry["control/count_time"]
+        replacement[count_time.attrs["target"]] = duration
 
-    bio = io.BytesIO()
-    with h5py.File(bio, 'w') as target:
-        hdf_copy(entry.parent, target, replacement)
-        # TODO: Consider storing the binning info in each detector
-        # TODO: Add the appropriate NeXus metadata to the fields
-        # TODO: Add masking info, etc.
-        control = target[entry.name]['control']
-        edges = control.create_dataset('bin_edges', data=request.bins.edges)
-        edges.attrs['units'] = 'seconds'
-        edges.attrs['long_name'] = 'bin edges for time binned data'
-        control.create_dataset('bin_mode', data='time')
-
+        bio = io.BytesIO()
+        with h5py.File(bio, "w") as target:
+            hdf_copy(entry.parent, target, replacement)
+            # TODO: Consider storing the binning info in each detector
+            # TODO: Add the appropriate NeXus metadata to the fields
+            # TODO: Add masking info, etc.
+            control = target[entry.name]["control"]
+            edges = control.create_dataset("bin_edges", data=bins.edges)
+            edges.attrs["units"] = "seconds"
+            edges.attrs["long_name"] = f"bin edges for {bins.mode} binned data"
+            control.create_dataset("bin_mode", data=bins.mode)
+    finally:
+        entry.file.close()
     data = bio.getvalue()
     reply = models.NexusReply(
         base64_data=base64.b64encode(data),
@@ -276,47 +286,68 @@ def _hdf_copy_internal(root, h5file, replacement):
             links.extend(_hdf_copy_internal(item, h5file, replacement))
     return links
 
-def bin_by_time(measurement, bins, summary=False):
+def bin_events(measurement, bins, summary=False):
+    if bins.mode != "time":
+        raise NotImplementedError("only time-mode binning implemented for now")
+
     key = (request_key(measurement), request_key(bins))
     binned_key = (*key, "binned")
     summed_key = (*key, "summed")
     if binned_key not in CACHE:
         #print("processing events")
         entry = open_nexus_entry(measurement)
-        #point = measurement.point # ignored in vsans rebin old
-        edges = bins.edges
-        #mask = bins.mask # ignored in vsans rebin old
-        binned = {}
-        for z, detector in (("front", "FL"), ("middle", "ML")):
-            print("fetching", detector)
-            eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
-            eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
-            print("loading", detector)
-            events = rebin_vsans_old.VSANSEvents(eventpath)
-            # TODO: correct for time of flight
-            # TODO: elide events in mask
-            print("binning", detector)
-            partial_counts, _ = events.rebin(edges)
-            for xy, data in partial_counts.items():
-                # form detector_FB, etc. from first letter of names
-                name = f"detector_{z[0].upper()}{xy[0].upper()}"
-                binned[name] = data
-        CACHE[binned_key] = binned
-    #else: print("cache hit", binned_key)
+        try:
+            # CRUFT: we are allowing some old vsans histograms to run for demo purposes.
+            if measurement.filename.startswith('sans') and measurement.filename < "sans72000":
+                binned = _bin_by_time_old_vsans(entry, bins)
+            else:
+                events = _fetch_events(entry)
+                binned = _bin_by_time(entry, events, bins)
+            # TODO: should be recording detectors and various devices in binned
+            # TODO: check the last edge is the correct length when it is truncated
+            # TODO: duration is incorrect with masking and/or incomplete bins
+            edges = bins.edges
+            duration = (edges[1:] - edges[:-1])
+        finally:
+            entry.file.close()
+        CACHE[binned_key] = binned, duration
 
     if not summary:
         return CACHE[binned_key]
 
     if summed_key not in CACHE:
         print("accumulating events")
-        binned = CACHE[binned_key]
+        binned, duration = CACHE[binned_key]
         summed = {}
         for detector, data in binned.items():
             total = np.sum(np.sum(data, axis=0), axis=0)
             summed[detector] = total
-        CACHE[summed_key] = summed
-    #else: print("cache hit", summed_key)
+        CACHE[summed_key] = summed, duration
     return CACHE[summed_key]
+
+# CRUFT: code for old-style histograms
+def _bin_by_time_old_vsans(entry, bins):
+    #point = measurement.point # ignored in vsans rebin old
+    edges = bins.edges
+    #mask = bins.mask # ignored in vsans rebin old
+    # TODO: not binning monitor or devices
+    binned = {}
+    for z, detector in (("front", "FL"), ("middle", "ML")):
+        print("fetching", detector)
+        eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
+        eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
+        print("loading", detector)
+        events = rebin_vsans_old.VSANSEvents(eventpath)
+        # TODO: correct for time of flight
+        # TODO: elide events in mask
+        print("binning", detector)
+        partial_counts, _ = events.rebin(edges)
+        for xy, data in partial_counts.items():
+            # form detector_FB, etc. from first letter of names
+            name = f"detector_{z[0].upper()}{xy[0].upper()}"
+            binned[name] = data
+    return binned
+
 
 def request_key(request):
     data = request.model_dump_json()
@@ -327,7 +358,7 @@ def request_key(request):
 
 def demo():
     from . import client
-    #CACHE.clear()
+
     filename = "sans68869.nxs.ngv"
     measurement = models.Measurement(filename=filename)
     #data_cache.load_nexus(request.filename, datapath=request.path)
@@ -349,5 +380,27 @@ def demo():
     with open('/tmp/sample.hdf', 'wb') as fd:
         fd.write(base64.b64decode(hdf.base64_data))
 
+def main():
+    import sys
+    # TODO: admit early that we need an options parser
+    if "clear" in sys.argv[1:]:
+        CACHE.clear()
+    elif "check" in sys.argv[1:]:
+        demo()
+    else:
+        print("""
+Usage: server clear|check
+
+clear: empties any caches associated with the data. You will want to
+    do this on the production server before deploying a new version.
+check: runs some simple event processing to make sure that the pieces
+    work together. This is a development tool acting as a poor substitute
+    for a proper test harness.
+
+To run the actual server for responding to web requests use uvicorn:
+
+    uvicorn event_processing.rebinning_api.server:app
+ """)
+
 if __name__ == "__main__":
-    demo()
+    main()
