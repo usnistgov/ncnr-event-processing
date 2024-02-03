@@ -15,6 +15,8 @@ from . import models
 from . import data_cache
 from . import rebin_vsans_old
 from . import nexus_util
+from . import event_capture
+
 
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
@@ -256,7 +258,7 @@ def request_key(request):
 
 # TODO: how do we clear the cache when upgrading the application?
 
-def demo():
+def check():
     from . import client
 
     filename = "sans68869.nxs.ngv"
@@ -280,12 +282,12 @@ def demo():
     with open('/tmp/sample.hdf', 'wb') as fd:
         fd.write(base64.b64decode(hdf.base64_data))
 
-def demo2():
-    raise NotImplementedError()
-    from . import event_capture
-    path = "202102/27861/data"
+def check2():
+    path = "vsans/202102/27861/data"
     nexusfile = "sans72109.nxs.ngv"
     event_capture.setup()
+    with event_capture.kafka_consumer() as consumer:
+        event_capture.fetch_events_for_file(consumer, nexusfile, datapath=path)
 
 # TODO: cache a version number, clearing the cache if there is a version mismatch
 def main():
@@ -294,7 +296,9 @@ def main():
     if "clear" in sys.argv[1:]:
         CACHE.clear()
     elif "check" in sys.argv[1:]:
-        demo()
+        check()
+    elif "check2" in sys.argv[1:]:
+        check2()
     else:
         print("""
 Usage: server clear|check

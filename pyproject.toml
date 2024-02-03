@@ -14,6 +14,9 @@ dependencies = [
     "requests",
     "plotly",
     "nicegui"
+    "kafka-python",
+    "fastavro",
+    "avro",
 ]
 
 [project.optional-dependencies]
