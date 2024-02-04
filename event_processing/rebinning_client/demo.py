@@ -1,7 +1,8 @@
 from dataclasses import dataclass, asdict
 import json
+import math
 from typing import Any, Optional
-from nicegui import ui
+from nicegui import run, ui
 import numpy as np
 import plotly.graph_objects as go
 import requests
@@ -81,6 +82,7 @@ def index():
     }
 
     binning_state = {
+        'fetching_summary': False,
         'duration': None,
         'num_bins': None,
         'bins': None,
@@ -295,8 +297,15 @@ def index():
                 num_bins = np.ceil((end - start) / self.bin_width)
                 object.__setattr__(self, 'num_bins', num_bins)
 
-        def get_time_bins_object(self):
+        def get_rebin_time_bins_object(self):
             edges = binning_client._lin_edges(self.duration, self.start, self.end, self.bin_width)
+            return binning_models.TimeBins(edges=edges, mask=None, mode='time')
+        
+        def get_summary_time_bins_object(self):
+            # drop any partially-filled bins right after zero, outside of self.start
+            # (to align bins with self.start)
+            offset_start = self.start % self.bin_width
+            edges = binning_client._lin_edges(self.duration, offset_start, self.duration, self.bin_width)
             return binning_models.TimeBins(edges=edges, mask=None, mode='time')
     
     time_bin_settings = TimeBinSettings()
@@ -320,17 +329,18 @@ def index():
         </style>
     ''')
 
-    with ui.header(elevated=False).style('background-color: #3874c8').classes('items-center justify-between'):
+    with ui.header(elevated=False).style('background-color: #3874c8').classes('items-center justify-normal'):
         ui.image('https://ncnr.nist.gov/ncnrdata/metadata/chrns-3-smaller.png').classes('w-48')
-        ui.label('CHRNS event rebinning')
-        ui.button(on_click=lambda: right_drawer.toggle(), icon='menu').props('flat color=white')
+        ui.label('CHRNS event rebinning').classes ('text-h4 pl-12')
+        ui.label('')
+        # ui.button(on_click=lambda: right_drawer.toggle(), icon='menu').props('flat color=white')
 
 
     with ui.tabs().classes('w-full') as tabs:
         exp_selector = ui.tab('Select Experiment')
         file_selector = ui.tab('Select File')
         rebinning_params = ui.tab('Rebinning Params')
-        tabs.on('update:model-value', lambda e: print('rebinning view activated', e))
+        # tabs.on('update:model-value', lambda e: print('rebinning view activated', e))
     with ui.tab_panels(tabs, value=exp_selector).classes('w-full'):
         with ui.tab_panel(exp_selector):
             with ui.row().classes("w-full"):
@@ -417,7 +427,12 @@ def index():
 
                 start_time = ui.number("Start").bind_value(time_bin_settings, 'start')
                 end_time = ui.number("End").bind_value(time_bin_settings, 'end')
-                ui.button('Show summary', on_click=lambda: update_summary())
+                ui.button('reset (start,end)', on_click=lambda: reset_binning_start_end())
+                show_summary = ui.button('Show summary', color='positive', on_click=lambda: update_summary())
+                show_summary.bind_enabled_from(binning_state, 'fetching_summary', backward=lambda v: not v)
+                show_summary.bind_visibility_from(binning_state, 'metadata', backward=lambda v: v is not None)
+                ui.spinner(size='3em').bind_visibility_from(binning_state, 'fetching_summary')
+
 
             summary_fig = {
                 'data': [],
@@ -428,7 +443,7 @@ def index():
                     yaxis = dict(title="total counts", showline=True, mirror=True, showgrid=True),
                     template='simple_white',
                 ),
-                'config': {'scrollZoom': True},
+                'config': {},
             }
 
             frame_fig = {
@@ -439,7 +454,7 @@ def index():
                     yaxis = dict(showline=True, mirror=True, showgrid=True, scaleanchor='x', scaleratio=1),
                     template='simple_white',
                 ),
-                'config': {'scrollZoom': True},
+                'config': {},
             }
 
             def handle_click(event):
@@ -455,16 +470,19 @@ def index():
 
 
             def handle_box_draw(event):
-                print('relayout: ', event)
+                # print('relayout: ', event)
                 if 'shapes' in event.args:
                     box = event.args['shapes'][-1]
                     start, end = sorted([box['x0'], box['x1']])
+                    start = max(start, 0.0)
+                    end = min(end, time_bin_settings.duration)
                     time_bin_settings.start, time_bin_settings.end = start, end
-                    print('setting start and end: ', start, end, time_bin_settings.start, time_bin_settings.end)
+                    # print('setting start and end: ', start, end, time_bin_settings.start, time_bin_settings.end)
                     update_binning_start_end()
 
             with ui.element('div').classes('columns-2 w-full gap-2'):
                 summary_plot = ui.plotly(summary_fig).classes("flex-auto")
+                # summary_plot.bind_visibility_from(binning_state, 'fetching_summary', backward=lambda v: not v)
                 summary_plot.on('plotly_relayout', handle_box_draw)
                 summary_plot.on('plotly_click', handle_click)
 
@@ -472,7 +490,6 @@ def index():
 
                    
             def show_frame(det_name: str, point_number: int):
-                print(det_name, point_number)
                 bins = binning_state['bins']
                 metadata = binning_state['metadata']
                 last_frame = binning_state['last_frame']
@@ -486,23 +503,24 @@ def index():
                 x = np.arange(data.shape[0])
                 y = np.arange(data.shape[1])
                 trace = go.Heatmap(x=x, y=y, z=data[:,:,0]).to_plotly_json()
-                print(data.shape, data.dtype, data[:,:,0])
-                # frame_fig.data = []
-                # frame_fig.add_traces([trace])
                 frame_fig['data'] = [trace]
-                # frame_fig.update_layout(title = f'Frame snapshot: {det_name} between times {start_time} and {end_time}')
-                frame_fig['layout']['title'] = f'Frame snapshot: {det_name} between times {start_time} and {end_time}'
+                frame_fig['layout']['title'] = f'Frame {det_name}: {start_time:.4f} < time < {end_time:.4f} (s)'
                 frame_plot.update()
 
             def get_metadata():
                 filename = datafile_search_state.get("selection", None)
                 path = datafile_search_state.get("selection_path", None)
                 if not filename or not path:
-                    ui.notify("file or path is undefined... can't show summary")
+                    ui.notify("file or path is undefined... can't get metadata")
                     binning_state['metadata'] = None
                 metadata = binning_client.get_metadata(filename, path=path)
                 binning_state['metadata'] = metadata
                 time_bin_settings.duration = metadata.duration
+
+            def reset_binning_start_end():
+                time_bin_settings.start = 0
+                time_bin_settings.end = time_bin_settings.duration
+                update_binning_start_end()
 
             def update_binning_start_end():
                 summary_fig['layout']['shapes'] = [
@@ -522,21 +540,22 @@ def index():
                 ]
                 summary_plot.update()
 
-            def update_summary():
-                filename = datafile_search_state.get("selection", None)
-                path = datafile_search_state.get("selection_path", None)
-                if not filename or not path:
-                    ui.notify("file or path is undefined... can't show summary")
-                metadata = binning_client.get_metadata(filename, path=path)
-                binning_state['metadata'] = metadata
-                duration = metadata.duration
-                # interval = duration / num_points
-                bins = time_bin_settings.get_time_bins_object()
+            async def update_summary():
+                metadata = binning_state['metadata']
+                if metadata is None:
+                    ui.notify("no file loaded")
+                    return
+                bins = time_bin_settings.get_summary_time_bins_object()
                 # bins = binning_client.time_linbins(metadata, interval=interval)
                 binning_state['bins'] = bins
-                summary = binning_client.get_summary(metadata, bins)
+                binning_state['fetching_summary'] = True
+                # print('starting fetch')
+                summary = await run.io_bound(binning_client.get_summary, metadata, bins)
+                binning_state['fetching_summary'] = False
+                # print('fetching done')
                 
                 time_bin_edges = summary.bins.edges
+                x = time_bin_edges.tolist()
                 time_bin_centers = (time_bin_edges[1:] + time_bin_edges[:-1])/2
                 total_counts = None
                 traces = []
@@ -550,7 +569,10 @@ def index():
                         total_counts += det_counts
                     y_max = max(y_max, det_counts.max())
                     y_min = min(y_min, det_counts.min())
-                    traces.append(go.Scatter(x=time_bin_centers.tolist(), y=det_counts.tolist(), name=detname).to_plotly_json())
+                    y = det_counts.tolist()
+                    # plotting vs edges, need the last value twice:
+                    y.append(det_counts[-1])
+                    traces.append(go.Scatter(x=x, y=y, name=detname, line_shape='hv').to_plotly_json())
 
                 # y_max = max([trace.y.max() for trace in traces])
                 # y_min = min([trace.y.min() for trace in traces])
