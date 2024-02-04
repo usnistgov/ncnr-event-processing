@@ -37,7 +37,7 @@ def post(endpoint, request):
 def get_metadata(filename, path=None, point=0):
     request = models.Measurement(filename=filename, path=path, point=point)
     reply = post("metadata", request=request)
-    print("metadata post reply", reply)
+    # print("metadata post reply", reply)
     return models.MetadataReply.model_validate(reply)
 
 def get_triggers(metadata):
