@@ -1,7 +1,12 @@
+import base64
 from dataclasses import dataclass, asdict
+import io
 import json
 import math
+import pathlib
+import re
 from typing import Any, Optional
+from fastapi.responses import StreamingResponse
 from nicegui import run, ui
 import numpy as np
 import plotly.graph_objects as go
@@ -83,6 +88,7 @@ def index():
 
     binning_state = {
         'fetching_summary': False,
+        'downloading_nexus': False,
         'duration': None,
         'num_bins': None,
         'bins': None,
@@ -173,7 +179,7 @@ def index():
         instrument_name: Optional[str] = None
         participant_name: Optional[str] = None
         experiment_title: Optional[str] = None
-        experiment_id: Optional[str] = '27861'
+        experiment_id: Optional[str] = None # '27861'
         page_size: int = 10
         offset: int = 0
 
@@ -218,7 +224,7 @@ def index():
     @dataclass
     class DatafileSearchParams:
         experiment_id: Optional[str] = None
-        filename_substring: str = '68869'
+        filename_substring: str = '' # '68869'
         page_size: int = 10
         offset: int = 0
 
@@ -417,6 +423,16 @@ def index():
                 duration_label = ui.input(label='Duration (s)').props('readonly')
                 duration_label.bind_value_from(time_bin_settings, 'duration')
 
+                show_summary = ui.button('Show summary', color='positive', on_click=lambda: update_summary())
+                show_summary.bind_enabled_from(binning_state, 'fetching_summary', backward=lambda v: not v)
+                show_summary.bind_visibility_from(binning_state, 'metadata', backward=lambda v: v is not None)
+                ui.spinner(size='3em', color='positive').bind_visibility_from(binning_state, 'fetching_summary')
+
+                start_download = ui.button('download rebinned', color='secondary', on_click=lambda: download_binned())
+                start_download.bind_enabled_from(binning_state, 'downloading_nexus', backward=lambda v: not v)
+                start_download.bind_visibility_from(binning_state, 'metadata', backward=lambda v: v is not None)
+                ui.spinner(size='3em', color='secondary').bind_visibility_from(binning_state, 'downloading_nexus')
+
             with ui.row():
                 # ui.button('load duration', on_click=lambda: get_metadata())
                 num_bins = ui.number("Num. bins", format='%d').bind_value(time_bin_settings, 'num_bins')
@@ -425,15 +441,12 @@ def index():
                 bin_width = ui.number("Bin width").bind_value(time_bin_settings, 'bin_width')
                 bin_width.bind_enabled_from(time_bin_settings, 'use_num', backward=lambda v: not v)
 
-                start_time = ui.number("Start").bind_value(time_bin_settings, 'start')
+                start_time = ui.number("Start").bind_value(time_bin_settings, 'start').props('size=40')
                 end_time = ui.number("End").bind_value(time_bin_settings, 'end')
+                
                 ui.button('reset (start,end)', on_click=lambda: reset_binning_start_end())
-                show_summary = ui.button('Show summary', color='positive', on_click=lambda: update_summary())
-                show_summary.bind_enabled_from(binning_state, 'fetching_summary', backward=lambda v: not v)
-                show_summary.bind_visibility_from(binning_state, 'metadata', backward=lambda v: v is not None)
-                ui.spinner(size='3em').bind_visibility_from(binning_state, 'fetching_summary')
 
-
+               
             summary_fig = {
                 'data': [],
                 'layout': dict(
@@ -590,6 +603,30 @@ def index():
                 summary_fig['layout']['xaxis']['range'] = [display_x_min, display_x_max]
                 summary_fig['config']['modeBarButtonsToAdd'] = ['drawrect']
                 update_binning_start_end()
+
+            async def download_binned():
+                metadata: binning_models.MetadataReply = binning_state['metadata']
+                if metadata is None:
+                    ui.notify("no file loaded")
+                    return
+                bins = time_bin_settings.get_rebin_time_bins_object()
+                binning_state['downloading_nexus'] = True
+                nexus_reply = await run.io_bound(binning_client.get_nexus, metadata, bins)
+                binning_state['downloading_nexus'] = False
+                orig_filename = metadata.measurement.filename
+                orig_path = pathlib.Path(orig_filename)
+                file_suffixes = ''.join(orig_path.suffixes)
+                file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
+                new_filename = f"{file_stem}_rebinned{file_suffixes}"
+                nexus_bytes = base64.b64decode(nexus_reply.base64_data)
+                ui.download(nexus_bytes, filename=new_filename)
+                # def iterfile():
+                #     with io.BytesIO(nexus_bytes) as file_like:
+                #         yield from file_like
+                
+                # headers = {
+                #     "Content-Disposition": f'attachment; filename="{new_filename}"', "Content-Type": "application/hdf5"}
+                # return StreamingResponse(iterfile(), headers=headers)
  
                 
 ui.run(favicon=FAVICON)
