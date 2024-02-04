@@ -1,6 +1,6 @@
 from dataclasses import dataclass, asdict
 import json
-from typing import Optional
+from typing import Any, Optional
 from nicegui import ui
 import numpy as np
 import plotly.graph_objects as go
@@ -55,7 +55,7 @@ NCNR_METADATA_API_URL = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
 @ui.page('/')
 def index():
     """ per-connection state defined within """
-    experiment_data = {
+    experiment_search_state = {
         "rows": [],
         "pagination": {
             "rowsPerPage": 10,
@@ -67,7 +67,7 @@ def index():
         'selection': '',
     }
 
-    datafiles_data = {
+    datafile_search_state = {
         'rows': [],
         "pagination": {
             "rowsPerPage": 10,
@@ -80,7 +80,9 @@ def index():
         'selection_path': '',
     }
 
-    binning_data = {
+    binning_state = {
+        'duration': None,
+        'num_bins': None,
         'bins': None,
         'metadata': None,
         'last_frame': None
@@ -95,15 +97,15 @@ def index():
         ]
         def select_handler(e):
             selected_id = e.selection[0]['id'] if len(e.selection) > 0 else ''
-            experiment_data['selection'] = selected_id
+            experiment_search_state['selection'] = selected_id
             if selected_id != '':
                 ui.tab_panels(tabs).value = file_selector
 
         table = ui.table(
             columns=experiment_columns,
-            rows=experiment_data['rows'],
+            rows=experiment_search_state['rows'],
             row_key='id',
-            pagination=experiment_data['pagination'],
+            pagination=experiment_search_state['pagination'],
             selection="single",
             on_select=select_handler,
         )
@@ -143,18 +145,19 @@ def index():
                 selected = e.selection[0]
                 selected_id = selected['filename']
                 selected_path = selected['localdir']
-            datafiles_data['selection'] = selected_id
-            datafiles_data['selection_path'] = selected_path
+            datafile_search_state['selection'] = selected_id
+            datafile_search_state['selection_path'] = selected_path
             if selected_id != '':
                 ui.tab_panels(tabs).value = rebinning_params
+                get_metadata()
         
-        extra_cols = get_metadata_columns(datafiles_data['rows'])
+        extra_cols = get_metadata_columns(datafile_search_state['rows'])
 
         table = ui.table(
             columns=columns + extra_cols,
-            rows=datafiles_data['rows'],
+            rows=datafile_search_state['rows'],
             row_key='filename',
-            pagination=datafiles_data['pagination'],
+            pagination=datafile_search_state['pagination'],
             selection="single",
             on_select=select_handler,
         )
@@ -168,7 +171,7 @@ def index():
         instrument_name: Optional[str] = None
         participant_name: Optional[str] = None
         experiment_title: Optional[str] = None
-        experiment_id: Optional[str] = None
+        experiment_id: Optional[str] = '27861'
         page_size: int = 10
         offset: int = 0
 
@@ -192,11 +195,11 @@ def index():
                 full_count_params.update(params)
                 full_count_result = requests.get(f"{NCNR_METADATA_API_URL}/experiments", params=full_count_params).json()
                 if len(full_count_result) > 0:
-                    experiment_data['pagination']['rowsNumber'] = full_count_result[0].get("full_count", 0)
-                    experiment_data['pagination']['page'] = 0
+                    experiment_search_state['pagination']['rowsNumber'] = full_count_result[0].get("full_count", 0)
+                    experiment_search_state['pagination']['page'] = 0
 
             r = requests.get(f"{NCNR_METADATA_API_URL}/experiments", params=params).json()
-            experiment_data['rows'] = r
+            experiment_search_state['rows'] = r
             experiments_table.refresh()
 
         def pagination_request_handler(self, request):
@@ -205,7 +208,7 @@ def index():
 
         def set_page(self, new_page: int):
             self.offset = self.page_size * (new_page - 1)
-            experiment_data['pagination']['page'] = new_page
+            experiment_search_state['pagination']['page'] = new_page
             self.search(update_total=False)
 
     experiment_search_params = ExperimentSearchParams()
@@ -213,7 +216,7 @@ def index():
     @dataclass
     class DatafileSearchParams:
         experiment_id: Optional[str] = None
-        filename_substring: str = ''
+        filename_substring: str = '68869'
         page_size: int = 10
         offset: int = 0
 
@@ -223,9 +226,9 @@ def index():
             print('experiment_id: ', self.experiment_id)
             if self.experiment_id is None or self.experiment_id == '':
                 self.offset = 0
-                datafiles_data['pagination']['rowsNumber'] = 0
-                datafiles_data['pagination']['page'] = 0
-                datafiles_data['rows'] = []
+                datafile_search_state['pagination']['rowsNumber'] = 0
+                datafile_search_state['pagination']['page'] = 0
+                datafile_search_state['rows'] = []
 
             else:
                 if update_total:
@@ -238,10 +241,10 @@ def index():
                     full_count_params.update(params)
                     full_count_result = requests.get(f"{NCNR_METADATA_API_URL}/datafiles", params=full_count_params).json()
                     if len(full_count_result) > 0:
-                        datafiles_data['pagination']['rowsNumber'] = full_count_result[0].get("full_count", 0)
-                    datafiles_data['pagination']['page'] = 0
+                        datafile_search_state['pagination']['rowsNumber'] = full_count_result[0].get("full_count", 0)
+                    datafile_search_state['pagination']['page'] = 0
                 r = requests.get(f"{NCNR_METADATA_API_URL}/datafiles", params=params).json()
-                datafiles_data['rows'] = r
+                datafile_search_state['rows'] = r
 
             datafiles_table.refresh()
 
@@ -251,10 +254,52 @@ def index():
 
         def set_page(self, new_page: int):
             self.offset = self.page_size * (new_page - 1)
-            datafiles_data['pagination']['page'] = new_page
+            datafile_search_state['pagination']['page'] = new_page
             self.search(update_total=False)
 
     datafile_search_params = DatafileSearchParams()
+
+    @dataclass
+    class TimeBinSettings:
+        duration: float = 1
+        start: float = 0
+        end: float = 1
+        num_bins: int = 251
+        bin_width: float = 1
+        use_num: bool = True
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            if name == 'duration':
+                object.__setattr__(self, 'start', 0.0)
+                object.__setattr__(self, 'end', value)
+            object.__setattr__(self, name, value)
+            self.update()
+
+        def update(self):
+            start = self.start
+            end = self.end
+            duration = self.duration
+            if start is None:
+                start = 0
+            elif start < 0:
+                start = duration + start
+            if end is None:
+                end = duration
+            elif end < 0:
+                end = duration + end
+
+            if self.use_num and self.num_bins is not None and self.num_bins > 0:
+                bin_width = (end - start)/(self.num_bins)
+                object.__setattr__(self, 'bin_width', bin_width)
+            elif self.bin_width > 0:
+                num_bins = np.ceil((end - start) / self.bin_width)
+                object.__setattr__(self, 'num_bins', num_bins)
+
+        def get_time_bins_object(self):
+            edges = binning_client._lin_edges(self.duration, self.start, self.end, self.bin_width)
+            return binning_models.TimeBins(edges=edges, mask=None, mode='time')
+    
+    time_bin_settings = TimeBinSettings()
 
     ui.page_title("CHRNS rebinning")
     ui.add_head_html('''
@@ -285,6 +330,7 @@ def index():
         exp_selector = ui.tab('Select Experiment')
         file_selector = ui.tab('Select File')
         rebinning_params = ui.tab('Rebinning Params')
+        tabs.on('update:model-value', lambda e: print('rebinning view activated', e))
     with ui.tab_panels(tabs, value=exp_selector).classes('w-full'):
         with ui.tab_panel(exp_selector):
             with ui.row().classes("w-full"):
@@ -313,7 +359,7 @@ def index():
                         ).bind_value(experiment_search_params, 'experiment_id')
                     with ui.row():
                         ui.label('Selected:')
-                        ui.label().bind_text_from(experiment_data, 'selection')
+                        ui.label().bind_text_from(experiment_search_state, 'selection')
                 with ui.column().style("flex:1"):
                     experiments_table()
 
@@ -329,13 +375,13 @@ def index():
                         label='Experiment ID (IMS)',
                         on_change=datafile_search_params.search,
                     )
-                    experiment_id.bind_value_from(experiment_data, 'selection')
+                    experiment_id.bind_value_from(experiment_search_state, 'selection')
                     experiment_id.bind_value_to(datafile_search_params, 'experiment_id')
 
                     filename = ui.input(
                         label='Filename',
                     )
-                    filename.bind_value_from(datafiles_data, 'selection')
+                    filename.bind_value_from(datafile_search_state, 'selection')
                     filename.props("readonly")
                 
             datafiles_table()
@@ -345,39 +391,56 @@ def index():
                 experiment_id = ui.input(
                     label='Experiment ID (IMS)',
                 )
-                experiment_id.bind_value_from(experiment_data, 'selection')
+                experiment_id.bind_value_from(experiment_search_state, 'selection')
                 experiment_id.props('readonly')
                 experiment_id.bind_value_to(datafile_search_params, 'experiment_id')
 
                 filename = ui.input(
                     label='Filename',
                 )
-                filename.bind_value_from(datafiles_data, 'selection')
+                filename.bind_value_from(datafile_search_state, 'selection')
                 filename.props('readonly')
 
                 localdir = ui.input(label='Path').props('readonly')
-                localdir.bind_value_from(datafiles_data, 'selection_path')
+                localdir.bind_value_from(datafile_search_state, 'selection_path')
 
-                ui.button('Get Counts vs. Time', on_click=lambda: update_summary())
+                duration_label = ui.input(label='Duration (s)').props('readonly')
+                duration_label.bind_value_from(time_bin_settings, 'duration')
 
-            summary_fig = go.Figure()
-            summary_fig.update_layout(
-                title="Time Summary",
-                margin=dict(l=0, r=0, t=30, b=0),
-                xaxis = dict(title="elapsed time (seconds)", showline=True, mirror=True, showgrid=True),
-                yaxis = dict(title="total counts", showline=True, mirror=True, showgrid=True),
-                template='simple_white',
-            )
-            frame_fig = go.Figure()
-            frame_fig.update_layout(
-                title = "Frame snapshot",
-                xaxis = dict(showline=True, mirror=True, showgrid=True),
-                yaxis = dict(showline=True, mirror=True, showgrid=True, scaleanchor='x', scaleratio=1),
-                template='simple_white',
-            )
-            # print(frame_fig.to_plotly_json())
+            with ui.row():
+                # ui.button('load duration', on_click=lambda: get_metadata())
+                num_bins = ui.number("Num. bins", format='%d').bind_value(time_bin_settings, 'num_bins')
+                num_bins.bind_enabled_from(time_bin_settings, 'use_num')
+                use_num = ui.toggle({True: 'Num.', False: 'Width'}).bind_value(time_bin_settings, 'use_num')
+                bin_width = ui.number("Bin width").bind_value(time_bin_settings, 'bin_width')
+                bin_width.bind_enabled_from(time_bin_settings, 'use_num', backward=lambda v: not v)
 
-            
+                start_time = ui.number("Start").bind_value(time_bin_settings, 'start')
+                end_time = ui.number("End").bind_value(time_bin_settings, 'end')
+                ui.button('Show summary', on_click=lambda: update_summary())
+
+            summary_fig = {
+                'data': [],
+                'layout': dict(
+                    title="Time Summary",
+                    # margin=dict(l=0, r=0, t=30, b=0),
+                    xaxis = dict(title="elapsed time (seconds)", showline=True, mirror=True, showgrid=True),
+                    yaxis = dict(title="total counts", showline=True, mirror=True, showgrid=True),
+                    template='simple_white',
+                ),
+                'config': {'scrollZoom': True},
+            }
+
+            frame_fig = {
+                'data': [],
+                'layout': dict(
+                    title = "Frame snapshot",
+                    xaxis = dict(showline=True, mirror=True, showgrid=True),
+                    yaxis = dict(showline=True, mirror=True, showgrid=True, scaleanchor='x', scaleratio=1),
+                    template='simple_white',
+                ),
+                'config': {'scrollZoom': True},
+            }
 
             def handle_click(event):
                 # show frame!
@@ -387,82 +450,124 @@ def index():
                     point = points[0]
                     data = point.pop('data', {})
                     name = data.pop('name', None)
-                    # curveNumber = point['curveNumber']
                     point_number = point['pointNumber']
-                    # pointIndex = point['pointIndex']
-                    # print(dict(curveNumber=curveNumber, pointNumber=point_number, pointIndex=pointIndex, name=name))
-                    print('handling click...', name, point_number)
                     show_frame(name, point_number)
 
 
-            # with ui.splitter() as splitter:
-            #     with splitter.before as summary_plot_space:
-            #         summary_plot = ui.plotly(summary_fig).classes("flex-auto")
-            #         # summary_plot.on('plotly_doubleclick', lambda event: print(event))
-            #         summary_plot.on('plotly_click', handle_click)
-            #     with splitter.after:
-            #         frame_plot = ui.plotly(frame_fig)
+            def handle_box_draw(event):
+                print('relayout: ', event)
+                if 'shapes' in event.args:
+                    box = event.args['shapes'][-1]
+                    start, end = sorted([box['x0'], box['x1']])
+                    time_bin_settings.start, time_bin_settings.end = start, end
+                    print('setting start and end: ', start, end, time_bin_settings.start, time_bin_settings.end)
+                    update_binning_start_end()
 
-            with ui.row():
-                with ui.column() as summary_plot_space:
-                    summary_plot = ui.plotly(summary_fig).classes("flex-auto")
-                    summary_plot.on('plotly_click', handle_click)
-                with ui.column() as frame_plot_space:
-                    frame_plot = ui.plotly(frame_fig)
+            with ui.element('div').classes('columns-2 w-full gap-2'):
+                summary_plot = ui.plotly(summary_fig).classes("flex-auto")
+                summary_plot.on('plotly_relayout', handle_box_draw)
+                summary_plot.on('plotly_click', handle_click)
 
+                frame_plot = ui.plotly(frame_fig).classes('w-full h-full')
 
+                   
             def show_frame(det_name: str, point_number: int):
                 print(det_name, point_number)
-                bins = binning_data['bins']
-                metadata = binning_data['metadata']
-                last_frame = binning_data['last_frame']
+                bins = binning_state['bins']
+                metadata = binning_state['metadata']
+                last_frame = binning_state['last_frame']
                 if point_number == last_frame:
                     return
-                binning_data['last_frame'] = point_number
+                binning_state['last_frame'] = point_number
                 frames = binning_client.get_frames(metadata, bins, start=point_number, stop=point_number+1)
                 start_time = bins.edges[point_number]
                 end_time = bins.edges[point_number + 1]
                 data = frames.data[det_name]
                 x = np.arange(data.shape[0])
                 y = np.arange(data.shape[1])
-                trace = go.Heatmap(x=x, y=y, z=data[:,:,0])
+                trace = go.Heatmap(x=x, y=y, z=data[:,:,0]).to_plotly_json()
                 print(data.shape, data.dtype, data[:,:,0])
-                frame_fig.data = []
-                frame_fig.add_traces([trace])
-                frame_fig.update_layout(title = f'Frame snapshot: {det_name} between times {start_time} and {end_time}')
+                # frame_fig.data = []
+                # frame_fig.add_traces([trace])
+                frame_fig['data'] = [trace]
+                # frame_fig.update_layout(title = f'Frame snapshot: {det_name} between times {start_time} and {end_time}')
+                frame_fig['layout']['title'] = f'Frame snapshot: {det_name} between times {start_time} and {end_time}'
                 frame_plot.update()
 
+            def get_metadata():
+                filename = datafile_search_state.get("selection", None)
+                path = datafile_search_state.get("selection_path", None)
+                if not filename or not path:
+                    ui.notify("file or path is undefined... can't show summary")
+                    binning_state['metadata'] = None
+                metadata = binning_client.get_metadata(filename, path=path)
+                binning_state['metadata'] = metadata
+                time_bin_settings.duration = metadata.duration
+
+            def update_binning_start_end():
+                summary_fig['layout']['shapes'] = [
+                    {
+                        'fillcolor': 'LightBlue',
+                        'layer': 'below',
+                        'line': {'width': 0},
+                        'opacity': 0.2,
+                        'type': 'rect',
+                        'x0': time_bin_settings.start,
+                        'x1': time_bin_settings.end,
+                        'xref': 'x',
+                        'y0': 0,
+                        'y1': 1,
+                        'yref': 'y domain'
+                    }
+                ]
+                summary_plot.update()
+
             def update_summary():
-                filename = datafiles_data.get("selection", None)
-                path = datafiles_data.get("selection_path", None)
+                filename = datafile_search_state.get("selection", None)
+                path = datafile_search_state.get("selection_path", None)
                 if not filename or not path:
                     ui.notify("file or path is undefined... can't show summary")
                 metadata = binning_client.get_metadata(filename, path=path)
-                binning_data['metadata'] = metadata
-                num_points = 1000
+                binning_state['metadata'] = metadata
                 duration = metadata.duration
-                interval = duration / num_points
-                bins = binning_client.time_linbins(metadata, interval=interval)
-                binning_data['bins'] = bins
+                # interval = duration / num_points
+                bins = time_bin_settings.get_time_bins_object()
+                # bins = binning_client.time_linbins(metadata, interval=interval)
+                binning_state['bins'] = bins
                 summary = binning_client.get_summary(metadata, bins)
                 
                 time_bin_edges = summary.bins.edges
                 time_bin_centers = (time_bin_edges[1:] + time_bin_edges[:-1])/2
                 total_counts = None
-                summary_fig.data = []
                 traces = []
+                y_min = float('inf')
+                y_max = float('-inf')
                 for detname in summary.counts:
                     det_counts = summary.counts[detname]
                     if total_counts is None:
                         total_counts = det_counts.copy()
                     else:
                         total_counts += det_counts
-                    traces.append(go.Scatter(x=time_bin_centers, y=det_counts, name=detname))
+                    y_max = max(y_max, det_counts.max())
+                    y_min = min(y_min, det_counts.min())
+                    traces.append(go.Scatter(x=time_bin_centers.tolist(), y=det_counts.tolist(), name=detname).to_plotly_json())
 
-                traces.append(go.Scatter(x=time_bin_centers, y=total_counts, name="total"))
-                summary_fig.add_traces(traces)
-                print("updating plot")
-                summary_plot.update()
-                
+                # y_max = max([trace.y.max() for trace in traces])
+                # y_min = min([trace.y.min() for trace in traces])
+                y_range = (y_max - y_min)
+                display_y_min = y_min - 0.1 * y_range
+                display_y_max = y_max + 0.1 * y_range
+                x_max = x_range = metadata.duration
+                x_min = 0.0
+                display_x_min = x_min - 0.1 * x_range
+                display_x_max = x_max + 0.1 * x_range
+
+                # traces.append(go.Scatter(x=time_bin_centers, y=total_counts, name="total"))
+                summary_fig['data'] = traces
+                summary_fig['layout']['yaxis']['range'] = [display_y_min, display_y_max]
+                summary_fig['layout']['xaxis']['range'] = [display_x_min, display_x_max]
+                summary_fig['config']['modeBarButtonsToAdd'] = ['drawrect']
+                update_binning_start_end()
+ 
                 
 ui.run(favicon=FAVICON)

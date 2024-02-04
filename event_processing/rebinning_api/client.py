@@ -137,7 +137,7 @@ def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=Non
     bins = models.SweepBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
     return bins
 
-def _lin_edges(duration, start, end, interval=None, nbins=None):
+def _lin_edges(duration, start, end, interval=None, nbins=None) -> models.vector:
     if start is None:
         start = 0
     elif start < 0:

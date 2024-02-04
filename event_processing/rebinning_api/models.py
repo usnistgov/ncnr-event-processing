@@ -80,7 +80,7 @@ class TimeBins(BaseModel):
     edges: vector
     #: Mask showing included time windows within the measurement, or None for
     #: the whole interval.
-    mask: TimeMask | None
+    mask: TimeMask | None = None
     #: Name of the binning class
     mode: str = "time"
 
