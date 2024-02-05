@@ -229,7 +229,7 @@ async def index(client: Client):
         instrument_name: Optional[str] = None
         participant_name: Optional[str] = None
         experiment_title: Optional[str] = None
-        experiment_id: Optional[str] = '27861'
+        experiment_id: Optional[str] = None # '27861'
         page_size: int = 10
         offset: int = 0
 
@@ -274,7 +274,7 @@ async def index(client: Client):
     @dataclass
     class DatafileSearchParams:
         experiment_id: Optional[str] = None
-        filename_substring: str = '68869'
+        filename_substring: str = '' # '68869'
         page_size: int = 10
         offset: int = 0
 
@@ -322,7 +322,7 @@ async def index(client: Client):
         duration: float = 1
         start: float = 0
         end: float = 1
-        num_bins: int = 251
+        num_bins: int = 100
         bin_width: float = 1
         use_num: bool = True
 
