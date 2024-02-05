@@ -117,7 +117,8 @@ def _hdf_copy_internal(root, h5file, replacement):
         elif hasattr(item, 'dtype'):
             data = replacement.get(item_path, item[()])
             # print("copying", item_path, item.name)
-            node = h5file.create_dataset(item.name, data=data)
+            compression = 4 if data.size > 1000000 else None
+            node = h5file.create_dataset(item.name, data=data, compression=compression)
             attrs = dict(item.attrs)
             node.attrs.update(item.attrs)
         else:
