@@ -62,7 +62,8 @@ NCNR_METADATA_API_URL = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
 # to look up state (can send the bin edges in post)
 SESSION_LOOKUP = {}
 
-app.add_static_files('/static', 'static')
+static_folder = pathlib.Path(__file__).parent / 'static'
+app.add_static_files('/static', static_folder)
 
 @app.get('/download/nexus/{session_id}')
 async def download_nexus(session_id: str):
