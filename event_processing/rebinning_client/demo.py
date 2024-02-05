@@ -7,10 +7,11 @@ import pathlib
 import re
 from typing import Any, Optional
 from fastapi.responses import StreamingResponse
-from nicegui import run, ui
+from nicegui import run, ui, app
 import numpy as np
 import plotly.graph_objects as go
 import requests
+import uuid
 
 from event_processing.rebinning_api import client as binning_client, models as binning_models
 
@@ -58,9 +59,54 @@ FAVICON = f"data:image/png;base64,{FAVICON_DATA}"
 NCNR_METADATA_API_URL = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
 # CHRNS_REBINNING_API_URL = "http://localhost:8000"
 
+SESSION_LOOKUP = {}
+
+@app.get('/download/nexus/{session_id}')
+async def download_nexus(session_id: str):
+    session_data = SESSION_LOOKUP.get(session_id, None)
+    if session_data is None:
+        return
+    
+    binning_state = session_data['binning_state']
+    time_bin_settings = session_data['time_bin_settings']
+
+    metadata: binning_models.MetadataReply = binning_state['metadata']
+    if metadata is None:
+        return
+    bins = time_bin_settings.get_rebin_time_bins_object()
+    # binning_state['downloading_nexus'] = True
+    print("starting nexus rebin")
+    nexus_reply = await run.io_bound(binning_client.get_nexus, metadata, bins)
+    # binning_state['downloading_nexus'] = False
+    print("done with nexus rebin")
+    orig_filename = metadata.measurement.filename
+    orig_path = pathlib.Path(orig_filename)
+    file_suffixes = ''.join(orig_path.suffixes)
+    file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
+    new_filename = f"{file_stem}_rebinned{file_suffixes}"
+    nexus_bytes = base64.b64decode(nexus_reply.base64_data)
+    result = io.BytesIO(nexus_bytes)
+    buffer_size = 2**16 # 64K
+    async def result_streamer():
+        buffer = result.read(buffer_size)
+        while buffer:
+            yield buffer
+            buffer = result.read(buffer_size)
+        
+    headers = {
+        'Content-Disposition': f'attachment; filename="{new_filename}"',
+        'Content-Type': 'application/hdf5',
+        'Content-Length': f'{len(nexus_bytes)}',
+    }
+    return StreamingResponse(result_streamer(), headers=headers)
+
+
 @ui.page('/')
 def index():
     """ per-connection state defined within """
+    session_id = uuid.uuid4().hex
+    SESSION_LOOKUP[session_id] = {}
+
     experiment_search_state = {
         "rows": [],
         "pagination": {
@@ -95,6 +141,8 @@ def index():
         'metadata': None,
         'last_frame': None
     }
+
+    SESSION_LOOKUP[session_id]['binning_state']  = binning_state
 
     @ui.refreshable
     def experiments_table():
@@ -179,7 +227,7 @@ def index():
         instrument_name: Optional[str] = None
         participant_name: Optional[str] = None
         experiment_title: Optional[str] = None
-        experiment_id: Optional[str] = None # '27861'
+        experiment_id: Optional[str] = '27861'
         page_size: int = 10
         offset: int = 0
 
@@ -224,7 +272,7 @@ def index():
     @dataclass
     class DatafileSearchParams:
         experiment_id: Optional[str] = None
-        filename_substring: str = '' # '68869'
+        filename_substring: str = '68869'
         page_size: int = 10
         offset: int = 0
 
@@ -315,6 +363,8 @@ def index():
             return binning_models.TimeBins(edges=edges, mask=None, mode='time')
     
     time_bin_settings = TimeBinSettings()
+
+    SESSION_LOOKUP[session_id]['time_bin_settings'] = time_bin_settings
 
     ui.page_title("CHRNS rebinning")
     ui.add_head_html('''
@@ -423,15 +473,18 @@ def index():
                 duration_label = ui.input(label='Duration (s)').props('readonly')
                 duration_label.bind_value_from(time_bin_settings, 'duration')
 
-                show_summary = ui.button('Show summary', color='positive', on_click=lambda: update_summary())
+                show_summary = ui.button('Show summary', color='positive')
                 show_summary.bind_enabled_from(binning_state, 'fetching_summary', backward=lambda v: not v)
                 show_summary.bind_visibility_from(binning_state, 'metadata', backward=lambda v: v is not None)
                 ui.spinner(size='3em', color='positive').bind_visibility_from(binning_state, 'fetching_summary')
 
-                start_download = ui.button('download rebinned', color='secondary', on_click=lambda: download_binned())
-                start_download.bind_enabled_from(binning_state, 'downloading_nexus', backward=lambda v: not v)
+                start_download = ui.link("DOWNLOAD REBINNED", f'/download/nexus/{session_id}').props('target=_blank download=file')
+                start_download.classes("bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded no-underline")
+
+                # start_download = ui.button('download rebinned', color='secondary', on_click=lambda: download_binned())
+                # start_download.bind_enabled_from(binning_state, 'downloading_nexus', backward=lambda v: not v)
                 start_download.bind_visibility_from(binning_state, 'metadata', backward=lambda v: v is not None)
-                ui.spinner(size='3em', color='secondary').bind_visibility_from(binning_state, 'downloading_nexus')
+                download_spinner = ui.spinner(size='3em', color='secondary').bind_visibility_from(binning_state, 'downloading_nexus')
 
             with ui.row():
                 # ui.button('load duration', on_click=lambda: get_metadata())
@@ -443,7 +496,7 @@ def index():
 
                 start_time = ui.number("Start").bind_value(time_bin_settings, 'start').props('size=40')
                 end_time = ui.number("End").bind_value(time_bin_settings, 'end')
-                
+
                 ui.button('reset (start,end)', on_click=lambda: reset_binning_start_end())
 
                
@@ -604,6 +657,9 @@ def index():
                 summary_fig['config']['modeBarButtonsToAdd'] = ['drawrect']
                 update_binning_start_end()
 
+            show_summary.on('click', update_summary)
+
+            # not using?
             async def download_binned():
                 metadata: binning_models.MetadataReply = binning_state['metadata']
                 if metadata is None:
