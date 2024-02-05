@@ -62,6 +62,8 @@ NCNR_METADATA_API_URL = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
 # to look up state (can send the bin edges in post)
 SESSION_LOOKUP = {}
 
+app.add_static_files('/static', 'static')
+
 @app.get('/download/nexus/{session_id}')
 async def download_nexus(session_id: str):
     session_data = SESSION_LOOKUP.get(session_id, None)
@@ -388,7 +390,7 @@ async def index(client: Client):
     ''')
 
     with ui.header(elevated=False).style('background-color: #3874c8').classes('items-center justify-normal'):
-        ui.image('https://ncnr.nist.gov/ncnrdata/metadata/chrns-3-smaller.png').classes('w-48')
+        ui.image('/static/chrns-3-smaller.png').classes('w-48')
         ui.label('CHRNS event rebinning').classes ('text-h4 pl-12')
         ui.label('')
         # ui.button(on_click=lambda: right_drawer.toggle(), icon='menu').props('flat color=white')
