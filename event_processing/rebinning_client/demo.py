@@ -7,7 +7,7 @@ import pathlib
 import re
 from typing import Any, Optional
 from fastapi.responses import StreamingResponse
-from nicegui import run, ui, app
+from nicegui import run, ui, app, Client
 import numpy as np
 import plotly.graph_objects as go
 import requests
@@ -58,7 +58,8 @@ LTIzVDE2OjI1OjAwLTA1OjAwaV62IgAAAABJRU5ErkJggg==
 FAVICON = f"data:image/png;base64,{FAVICON_DATA}"
 NCNR_METADATA_API_URL = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
 # CHRNS_REBINNING_API_URL = "http://localhost:8000"
-
+# TODO: convert to hidden form with post urlencoded, so that we don't have
+# to look up state (can send the bin edges in post)
 SESSION_LOOKUP = {}
 
 @app.get('/download/nexus/{session_id}')
@@ -74,10 +75,9 @@ async def download_nexus(session_id: str):
     if metadata is None:
         return
     bins = time_bin_settings.get_rebin_time_bins_object()
-    # binning_state['downloading_nexus'] = True
+    binning_state['downloading_nexus'] = True
     print("starting nexus rebin")
     nexus_reply = await run.io_bound(binning_client.get_nexus, metadata, bins)
-    # binning_state['downloading_nexus'] = False
     print("done with nexus rebin")
     orig_filename = metadata.measurement.filename
     orig_path = pathlib.Path(orig_filename)
@@ -92,6 +92,8 @@ async def download_nexus(session_id: str):
         while buffer:
             yield buffer
             buffer = result.read(buffer_size)
+
+        binning_state['downloading_nexus'] = False
         
     headers = {
         'Content-Disposition': f'attachment; filename="{new_filename}"',
@@ -102,7 +104,7 @@ async def download_nexus(session_id: str):
 
 
 @ui.page('/')
-def index():
+async def index(client: Client):
     """ per-connection state defined within """
     session_id = uuid.uuid4().hex
     SESSION_LOOKUP[session_id] = {}
@@ -478,7 +480,7 @@ def index():
                 show_summary.bind_visibility_from(binning_state, 'metadata', backward=lambda v: v is not None)
                 ui.spinner(size='3em', color='positive').bind_visibility_from(binning_state, 'fetching_summary')
 
-                start_download = ui.link("DOWNLOAD REBINNED", f'/download/nexus/{session_id}').props('target=_blank download=file')
+                start_download = ui.link("REBIN+DOWNLOAD", f'/download/nexus/{session_id}').props('target=_blank download=file')
                 start_download.classes("bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded no-underline")
 
                 # start_download = ui.button('download rebinned', color='secondary', on_click=lambda: download_binned())
@@ -494,7 +496,7 @@ def index():
                 bin_width = ui.number("Bin width").bind_value(time_bin_settings, 'bin_width')
                 bin_width.bind_enabled_from(time_bin_settings, 'use_num', backward=lambda v: not v)
 
-                start_time = ui.number("Start").bind_value(time_bin_settings, 'start').props('size=40')
+                start_time = ui.number("Start").bind_value(time_bin_settings, 'start')
                 end_time = ui.number("End").bind_value(time_bin_settings, 'end')
 
                 ui.button('reset (start,end)', on_click=lambda: reset_binning_start_end())
@@ -546,13 +548,13 @@ def index():
                     # print('setting start and end: ', start, end, time_bin_settings.start, time_bin_settings.end)
                     update_binning_start_end()
 
-            with ui.element('div').classes('columns-2 w-full gap-2'):
-                summary_plot = ui.plotly(summary_fig).classes("flex-auto")
+            with ui.element('div').classes('flex w-full gap-2'):
+                summary_plot = ui.plotly(summary_fig).classes("flex-1")
                 # summary_plot.bind_visibility_from(binning_state, 'fetching_summary', backward=lambda v: not v)
                 summary_plot.on('plotly_relayout', handle_box_draw)
                 summary_plot.on('plotly_click', handle_click)
 
-                frame_plot = ui.plotly(frame_fig).classes('w-full h-full')
+                frame_plot = ui.plotly(frame_fig).classes('flex-1 h-full')
 
                    
             def show_frame(det_name: str, point_number: int):
@@ -683,6 +685,9 @@ def index():
                 # headers = {
                 #     "Content-Disposition": f'attachment; filename="{new_filename}"', "Content-Type": "application/hdf5"}
                 # return StreamingResponse(iterfile(), headers=headers)
- 
+
+    await client.connected()
+    await client.disconnected()
+    SESSION_LOOKUP.pop(session_id)
                 
 ui.run(favicon=FAVICON)
