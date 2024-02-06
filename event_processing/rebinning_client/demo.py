@@ -390,6 +390,28 @@ async def index(client: Client):
         </style>
     ''')
 
+    ui.add_head_html('''
+    <style>
+        #app {
+            height: 100%;
+            width: 100%;
+        }
+
+        main.q-page, div.nicegui-content {
+            height: 100%;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            flex: 1 1 0;
+        }
+
+        div.plot-container.plotly, div.js-plotly-plot {
+            height: 100%;
+        }
+    </style>
+    ''')
+
     with ui.header(elevated=False).style('background-color: #3874c8').classes('items-center justify-normal'):
         ui.image('/static/chrns-3-smaller.png').classes('w-48')
         ui.label('CHRNS event rebinning').classes ('text-h4 pl-12')
@@ -402,7 +424,7 @@ async def index(client: Client):
         file_selector = ui.tab('Select File')
         rebinning_params = ui.tab('Rebinning Params')
         # tabs.on('update:model-value', lambda e: print('rebinning view activated', e))
-    with ui.tab_panels(tabs, value=exp_selector).classes('w-full'):
+    with ui.tab_panels(tabs, value=exp_selector).classes('w-full flex-1'):
         with ui.tab_panel(exp_selector):
             with ui.row().classes("w-full"):
                 with ui.column():
@@ -551,15 +573,15 @@ async def index(client: Client):
                     # print('setting start and end: ', start, end, time_bin_settings.start, time_bin_settings.end)
                     update_binning_start_end()
 
-            with ui.row().classes('w-full'):
-                with ui.column().classes('flex-1'):
-                    with ui.element('div').classes('w-full h-96 min-h-96'):
+            with ui.row().classes('w-full flex-1'):
+                with ui.column().classes('flex-1 h-full'):
+                    with ui.element('div').classes('w-full h-full'):
                         summary_plot = ui.plotly(summary_fig)
                         summary_plot.bind_visibility_from(binning_state, 'fetching_summary', backward=lambda v: not v)
                         summary_plot.on('plotly_relayout', handle_box_draw)
                         summary_plot.on('plotly_click', handle_click)
-                with ui.column().classes('flex-1'):
-                    with ui.element('div').classes('w-full h-96 min-h-96'):
+                with ui.column().classes('flex-1 h-full'):
+                    with ui.element('div').classes('w-full h-full'):
                         frame_plot = ui.plotly(frame_fig)
 
                    
