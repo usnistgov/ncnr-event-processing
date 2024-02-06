@@ -392,7 +392,10 @@ def _cleanup_vsans(entry, raw_events):
         #print(f"{k}:{name} {dims=} y:{y.min()}-{y.max():<3} x:{x.min()}-{x.max():<3}")
         if not ((x>=0).all() and (x<dims[1]).all() and (y>=0).all() and (y<dims[0]).all()):
             raise RuntimeError(f"Bad pixel id in {datapath}")
-        times = times - start
+        #print(f"times: {times.min()}:{times.max()} relative to {start}")
+        #print(f"subtracting {start} from {times[0]} = {times[0]-start}")
+        times -= start
+        #print(f"times: {times.min()/1e9:.3f}:{times.max()/1e9:.3f} relative to {int(start//1e9)}")
         # TODO: correct times for time of flight from wavelength and distance
         events[f"detector_{name}"] = dict(dims=dims, ts=times, x=x, y=y)
     return events
@@ -591,6 +594,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         else:
             db.trigger(record['timestamp'])
     db.set_times(start_time, stop_time, arm_time, disarm_time)
+    #print(f"gating [{start_time}-{stop_time}] in [{arm_time}-{disarm_time}]")
 
     start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
     if stop_us < start_us:

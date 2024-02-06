@@ -198,7 +198,7 @@ def bin_events(measurement, bins, summary=False):
     events_key = (key[0], "events")
     binned_key = (*key, "binned")   # binning keyed by both entry and bin spec
     summed_key = (*key, "summed")
-    if binned_key not in CACHE:
+    if 0 or binned_key not in CACHE:
         #print("processing events")
         entry = nexus_util.open_nexus_entry(measurement)
         try:
@@ -207,13 +207,13 @@ def bin_events(measurement, bins, summary=False):
                 binned = _bin_by_time_old_vsans(entry, bins)
             else:
                 # TODO: drop raw events cache once we have event_cleanup working for everything
-                if raw_events_key not in CACHE:
+                if 0 or raw_events_key not in CACHE:
                     print(f"fetching raw events for {entry.file.filename}")
                     event_capture.setup()  # in case it hasn't already been setup for sim
                     raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
                     print("caching raw events to", raw_events_key)
                     CACHE[raw_events_key] = raw_events
-                if events_key not in CACHE:
+                if 0 or events_key not in CACHE:
                     print("correcting")
                     raw_events = CACHE[raw_events_key]
                     #print(raw_events.__dict__)
@@ -272,16 +272,19 @@ def _bin_by_time_old_vsans(entry, bins):
 
 def _bin_by_time(events, edges):
     nbins = len(edges) - 1
+    edges = np.asarray(edges*1e9, 'int64')
     binned = {}
     for name, detector in events.items():
         dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']
-        print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
+        #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
+        ##print(edges[:5], edges[-5:])
         #print(edges)
         ny, nx = dims
         time_bins = np.searchsorted(edges, ts)
-        data = np.zeros((ny, nx, nbins+2))
+        data = np.zeros((ny, nx, nbins+2), 'int32')
         np.add.at(data, (y, x, time_bins), 1)
         binned[name] = data[:, :, 1:-1]
+        print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned[name].sum():<8d}")
     return binned
 
 def request_key(request):
