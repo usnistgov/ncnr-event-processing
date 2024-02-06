@@ -110,7 +110,7 @@ import json
 from urllib.request import urlopen
 
 from kafka import KafkaConsumer, TopicPartition
-#import fastavro
+import fastavro
 import avro
 import avro.io
 import numpy as np
@@ -143,7 +143,8 @@ def fetch_schema(schema_name, version=1):
         raise TypeError("Asking for {schema_name} v{version} but latest is v{latest}. Upgrade your stream processing code.")
     data = json.loads(urlopen(f"{url}/latest").read())
     schema = data['schema']
-    return avro_decoder(schema) if 'enum' in schema else fastavro_decoder(schema)
+    #return avro_decoder(schema) if 'enum' in schema else fastavro_decoder(schema)
+    return avro_decoder(schema)
 
 #def load_schema(schema_name, version=1):
 #    if version > 2:
@@ -158,7 +159,8 @@ def avro_decoder(schema):
     def decoder(message):
         with BytesIO(message.value) as fd:
             data = reader.read(avro.io.BinaryDecoder(fd))
-            return SimpleNamespace(**data)
+            return data
+            #return SimpleNamespace(**data) # doesn't work for nested structures
     return decoder
 
 def fastavro_decoder(schema):
@@ -167,8 +169,11 @@ def fastavro_decoder(schema):
             return fastavro.read.schemaless_reader(fd, schema)
     return decoder
 
+EVENT_URL = None
 def setup_sim():
     global EVENT_URL, DETECTOR_SCHEMA, TIMING_SCHEMA, DEVICE_SCHEMA #, METADATA_SCHEMA
+    if EVENT_URL is not None:
+        return
     EVENT_URL = "ncnr-r9nano.campus.nist.gov:19092"
     DETECTOR_SCHEMA = load_schema("neutron_packet", version=1)
     TIMING_SCHEMA = load_schema("timing", version=1)
@@ -177,6 +182,8 @@ def setup_sim():
 
 def setup():
     global EVENT_URL, DETECTOR_SCHEMA, TIMING_SCHEMA, DEVICE_SCHEMA #, METADATA_SCHEMA
+    if EVENT_URL is not None:
+        return
     EVENT_URL = f"{REDPANDA_IP}:{REDPANDA_STREAM_PORT}"
     DETECTOR_SCHEMA = fetch_schema("neutron_packet", version=1)
     TIMING_SCHEMA = fetch_schema("syncInfo", version=1)
@@ -219,7 +226,10 @@ class EventsManager:
     practices we can ignore these effects, or delay the disam by maximum lag so
     that corrected events include everything in [0, tmax].
     """
-    # TODO: other metadata fields? Total counts? Histogram axis? Number of fast shutter drops?
+    # TODO: instrument?
+    # TODO: Total counts? Histogram axis? Number of fast shutter drops?
+    # TODO: other metadata fields?
+
     # Event stream metadata
     version: int = 1 # event file version
     arm: int = 0
@@ -231,23 +241,26 @@ class EventsManager:
         """
         Create the storage file
         """
-        path = Path(path)
-        if path.exists():
-            for file in path.glob('*'):
-                file.unlink()
-        else:
-            path.mkdir(exist_ok=True, parents=True)
-        self._root = path
+        #path = Path(path)
+        #if path.exists():
+        #    for file in path.glob('*'):
+        #        file.unlink()
+        #else:
+        #    path.mkdir(exist_ok=True, parents=True)
+        #self._root = path
         self._fields = {}
 
     def flush(self):
-        for name, fp in self._fields.items():
-            fp.flush()
+        #for name, fp in self._fields.items():
+        #    fp.flush()
+        return
 
     def close(self):
-        for name, fp in self._fields.items():
-            fp.close()
-        self._fields = {}
+        #print("close", self._fields)
+        #for name, fp in self._fields.items():
+        #    fp.close()
+        #self._fields = {}
+        return
 
     def set_times(self, start, stop, arm, disarm):
         self.start, self.stop = start, stop
@@ -255,11 +268,12 @@ class EventsManager:
         self._update_meta()
 
     def _update_meta(self):
-        with open(self._root / "startstop.raw", "wb") as fp:
-           fp.write(np.asarray(self.start, '<i8').data) 
-           fp.write(np.asarray(self.stop, '<i8').data) 
-           fp.write(np.asarray(self.arm, '<i8').data) 
-           fp.write(np.asarray(self.disarm, '<i8').data) 
+        #with open(self._root / "startstop.raw", "wb") as fp:
+        #   fp.write(np.asarray(self.start, '<i8').data)
+        #   fp.write(np.asarray(self.stop, '<i8').data)
+        #   fp.write(np.asarray(self.arm, '<i8').data)
+        #   fp.write(np.asarray(self.disarm, '<i8').data)
+        return
 
     def trigger(self, timestamp):
         self._create_or_extend_timestamp('T0', (timestamp,))
@@ -275,25 +289,113 @@ class EventsManager:
         self._create_or_extend_pairs(name, neutrons, 'pixel', '<i4')
 
     def _create_or_extend_timestamp(self, name, events):
-        timestamp, = zip(*events)
-        timestamp = np.asarray(list(timestamp), '<i8')
-        ts_name = f"{name}_time.raw"
-        if ts_name not in self._fields:
-            self._fields[ts_name] = (self._root / ts_name).open('wb')
-        self._fields[ts_name].write(timestamp.data)
+        #print(f"extend {name} timestamp", events)
+        data = self._fields.setdefault(name, [])
+        data.extend(events)
+        #timestamp, = zip(*events)
+        #timestamp = np.asarray(list(timestamp), '<i8')
+        #ts_name = f"{name}_time.raw"
+        #if ts_name not in self._fields:
+        #    self._fields[ts_name] = (self._root / ts_name).open('wb')
+        #self._fields[ts_name].write(timestamp.data)
 
     def _create_or_extend_pairs(self, name, events, field, dtype):
-        timestamp, values = zip(*events)
-        timestamp = np.asarray(timestamp, '<i8')
-        values = np.asarray(values, dtype)
-        ts_name = f"{name}_time.raw"
-        val_name = f"{name}_{field}.raw"
-        if ts_name not in self._fields:
-            self._fields[ts_name] = (self._root / ts_name).open('wb')
-            self._fields[val_name] = (self._root / val_name).open('wb')
-        self._fields[ts_name].write(timestamp.data)
-        self._fields[val_name].write(values.data)
+        #print("extend {name} pairs", events)
+        data = self._fields.setdefault(name, [])
+        data.extend(events)
+        #timestamp, values = zip(*events)
+        #timestamp = np.asarray(timestamp, '<i8')
+        #values = np.asarray(values, dtype)
+        #ts_name = f"{name}_time.raw"
+        #val_name = f"{name}_{field}.raw"
+        #if ts_name not in self._fields:
+        #    self._fields[ts_name] = (self._root / ts_name).open('wb')
+        #    self._fields[val_name] = (self._root / val_name).open('wb')
+        #self._fields[ts_name].write(timestamp.data)
+        #self._fields[val_name].write(values.data)
 
+
+def event_cleanup(entry, raw_events):
+    """
+    Translate the events from event manager into a form that can be fed to
+    rebinning. That means converting pixels into detector index values,
+    subtracting the gate_on from the event times, and correcting for time
+    of flight from sample to detector. (when completed) we will convert detector pixels
+    into numpy arrays with zero indexing into a compact array
+    """
+    instrument = lookup_instrument(entry)
+    if instrument == "vsans":
+        return _cleanup_vsans(entry, raw_events)
+    raise NotImplementedError(f"Do not yet support events for {instrument}")
+
+def _cleanup_vsans(entry, raw_events):
+    make_table = False
+    # Table data extracted from sans72110.nxs.ngv
+    # det  yrange   events =? integrated
+    # 0:FR   0:47     9012 =? 9013    NO!!!
+    # 1:FT  48:95     7834 =? 7834    yes
+    # 2:FB  96:143    6304 =? 6304    yes
+    # 3:FL 144:191    9682 =? 9683    NO!!!
+    # 4:MB  96:143    5137 =? 5137    yes
+    # 5:MR   0:47    10143 =? 10143   yes
+    # 6:ML 144:191   10328 =? 6776    NO!!!
+    # 7:MT  48:95     6507 =? 6508    NO!!!
+
+    # TODO: caller has datapath
+    cycle = "*"
+    proposal = entry["DAS_logs/experiment/proposalId"][0]
+    filename = entry["DAS_logs/trajectoryData/fileName"][0]
+    datapath = f"vsans/{cycle}/{proposal}/data/{filename}.nxs.ngv"
+    # TODO: need to associated redpanda detector number with nexus detector field
+    start = raw_events.start
+    wavelength = entry["instrument/beam/monochromator/wavelength"][0]
+    wavelength_spread = entry["instrument/beam/monochromator/wavelength_spread"][0]
+    print(f"{wavelength=} {wavelength_spread=}")
+    detectors = list("FR FT FB FL MB MR ML MT R".split())
+
+    events = {}
+    if make_table:
+        print(f"    # Table data extracted from {datapath}")
+        print(f"    # det  yrange   events =? integrated")
+    for k, name in enumerate(detectors):
+        nxdetector = entry.get(f"instrument/detector_{name}", None)
+        if nxdetector is None:
+            logging.warn(f"Missing {entry.name}/instrument/detector_{name} in {datapath}")
+            continue
+        distance = nxdetector["distance"][0]
+        #print(f"detector_{name}/distance: {distance}")
+        DAS = entry[nxdetector["data"].attrs['target']].parent
+        dims = tuple(DAS['dimension'][()])
+        #print(f"detector_{name}->{DAS.name} {dims=}")
+        columns = list(zip(*raw_events._fields[f"detector_{k}"]))
+        times, pixels = np.asarray(columns[0]), np.asarray(columns[1])
+        y, x = pixels >> 16, pixels & 0xFFFF
+        if make_table:
+            num_events = len(pixels)
+            counts = nxdetector["integrated_count"][0]
+            match = "yes" if counts == num_events else "NO!!!"
+            print(f"    # {k}:{name} {y.min():3d}:{y.max():<3d} {num_events:7d} =? {counts:<7d} {match}")
+            #print("  x", x)
+            #print("  y", y)
+        if name == "R":
+            pass
+        elif name[1] == "R": # offset=0, fliplr
+            x, y = x, 47-y
+        elif name[1] == "L": # offset=144, flipud
+            x, y = 127-x, y-144
+        elif name[1] == "T": # swapaxes offset=48
+            x, y = y-48, x
+        elif name[1] == "B": # swapaxes offset=96, fliplr, flipud
+            x, y = 143-y, 127-x
+        else:
+            raise UnreachableCode
+        #print(f"{k}:{name} {dims=} y:{y.min()}-{y.max():<3} x:{x.min()}-{x.max():<3}")
+        if not ((x>=0).all() and (x<dims[1]).all() and (y>=0).all() and (y<dims[0]).all()):
+            raise RuntimeError(f"Bad pixel id in {datapath}")
+        times = times - start
+        # TODO: correct times for time of flight from wavelength and distance
+        events[f"detector_{name}"] = dict(dims=dims, ts=times, x=x, y=y)
+    return events
 
 def process_trigger(message, db):
     record = TIMING_SCHEMA(message)
@@ -350,18 +452,21 @@ def stream_history(consumer, topic, start, stop, partitions=None, timeout_ms=100
         consumer.assign([partition_handle])
 
         if 0:
-            earliest = consumer.beginning_offsets([partition_handle])[partition_handle]
-            latest = consumer.end_offsets([partition_handle])[partition_handle]
-            print(f"partition[{pid}] {earliest=} {latest=}")
-            consumer.seek(partition_handle, earliest)
-            batches = consumer.poll()# timeout_ms=timeout_ms)
+            earliest_offset = consumer.beginning_offsets([partition_handle])[partition_handle]
+            latest_offset = consumer.end_offsets([partition_handle])[partition_handle]
+            print(f"partition[{pid}] offset {earliest_offset=} {latest_offset=}")
+            consumer.seek(partition_handle, earliest_offset)
+            batches = consumer.poll(timeout_ms=timeout_ms)
             #print(batches)
             #print("ok", batches[partition_handle][0].timestamp)
-            earliest = batches[partition_handle][0].timestamp
-            consumer.seek(partition_handle, latest-1)
-            batches = consumer.poll() #timeout_ms=timeout_ms)
-            latest = batches[partition_handle][0].timestamp
-            print(f"partition[{pid}] {earliest=} {latest=}")
+            earliest_time = batches[partition_handle][0].timestamp if batches else -1
+            if latest_offset > earliest_offset:
+                consumer.seek(partition_handle, latest_offset-1)
+                batches = consumer.poll(timeout_ms=timeout_ms)
+                latest_time = batches[partition_handle][0].timestamp if batches else -1
+            else:
+                latest_time = earliest_time
+            print(f"partition[{pid}] {earliest_time=} {latest_time=}")
 
         offsets = consumer.offsets_for_times({partition_handle: start})
         #print(offsets, topic, partition_handle)
@@ -380,6 +485,7 @@ def stream_history(consumer, topic, start, stop, partitions=None, timeout_ms=100
             messages = batches[partition_handle]
             #print("batch", len(messages), messages[0].timestamp, messages[-1].timestamp)
             for message in messages:
+                #print("times", message.timestamp, stop)
                 if message.timestamp >= stop:
                     break
                 yield message
@@ -421,11 +527,15 @@ def fetch_events_for_file(consumer, filename, datapath=None):
         for entry_name in nexus_util.nexus_entries(nexus):
             entry = nexus[entry_name]
             for point, start in enumerate(entry['DAS_logs/counter/eventStartTime']):
-                fetch_events_for_point(consumer, entry, point)
+                _fetch_events_for_point(consumer, entry, point)
     finally:
         nexus.close()
 
-def fetch_events_for_point(consumer, entry, point, timeout_ms=100):
+def fetch_events_to_memory(entry, point, timeout_ms=100):
+    with kafka_consumer() as consumer:
+        return _fetch_events_for_point(consumer, entry, point, timeout_ms)
+
+def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     """
     Fetch messages between nexus start and end times and create an event
     cache file for further processing.
@@ -468,26 +578,29 @@ def fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     for message in stream:
         record = TIMING_SCHEMA(message)
         # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
-        if record.timestamp < arm_time:
+        if record['timestamp'] < arm_time:
             continue
-        if record.timestamp > disarm_time:
+        if record['timestamp'] > disarm_time:
             break
-        if record.syncType == "GATE_ON":
-            start_time = record.timestamp
-        elif record.syncType == "GATE_OFF":
-            stop_time = record.timestamp
+        if record['syncType'] == "GATE_ON":
+            #print("GATE_ON", message.timestamp, record.timestamp)
+            start_time = record['timestamp']
+        elif record['syncType'] == "GATE_OFF":
+            #print("GATE_OFF", message.timestamp, record.timestamp)
+            stop_time = record['timestamp']
         else:
-            db.trigger(record.timestamp)
+            db.trigger(record['timestamp'])
     db.set_times(start_time, stop_time, arm_time, disarm_time)
 
-    start_ms, stop_ms = db.start // 1000000, db.stop // 1000000 # ns -> ms
-    if stop_ms < start_ms:
+    start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
+    if stop_us < start_us:
         raise RuntimeError(f"No counter disarm for dataset {filename}")
     for channel in ('monitor', 'detector', 'device'):
         topic = f"{instrument}_{channel}"
         total, n = 0, 0
         t_start = time.perf_counter_ns()
-        for message in stream_history(consumer, topic, start_ms, stop_ms, timeout_ms=timeout_ms):
+        stream = stream_history(consumer, topic, start_us, stop_us, timeout_ms=timeout_ms)
+        for message in stream:
             t0 = time.perf_counter_ns()
             process_message(message, db)
             total += time.perf_counter_ns() - t0
@@ -496,6 +609,7 @@ def fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         print(f"Processing time for {n} messages in {topic} is {total/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
 
     db.close()
+    return db
 
 def buffer_key(message):
     """

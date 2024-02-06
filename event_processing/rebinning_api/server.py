@@ -193,7 +193,10 @@ def bin_events(measurement, bins, summary=False):
         raise NotImplementedError("only time-mode binning implemented for now")
 
     key = (request_key(measurement), request_key(bins))
-    binned_key = (*key, "binned")
+    #print("Key:", key)
+    raw_events_key = (key[0], "raw")  # events keyed by entry, not bin spec
+    events_key = (key[0], "events")
+    binned_key = (*key, "binned")   # binning keyed by both entry and bin spec
     summed_key = (*key, "summed")
     if binned_key not in CACHE:
         #print("processing events")
@@ -203,8 +206,24 @@ def bin_events(measurement, bins, summary=False):
             if measurement.filename.startswith('sans') and measurement.filename < "sans72000":
                 binned = _bin_by_time_old_vsans(entry, bins)
             else:
-                events = _fetch_events(entry)
-                binned = _bin_by_time(entry, events, bins)
+                # TODO: drop raw events cache once we have event_cleanup working for everything
+                if raw_events_key not in CACHE:
+                    print(f"fetching raw events for {entry.file.filename}")
+                    event_capture.setup()  # in case it hasn't already been setup for sim
+                    raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
+                    print("caching raw events to", raw_events_key)
+                    CACHE[raw_events_key] = raw_events
+                if events_key not in CACHE:
+                    print("correcting")
+                    raw_events = CACHE[raw_events_key]
+                    #print(raw_events.__dict__)
+                    #raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
+                    events = event_capture.event_cleanup(entry, raw_events)
+                    #print(events)
+                    CACHE[events_key] = events
+                events = CACHE[events_key]
+                binned = _bin_by_time(events, bins.edges)
+                #binned = _bin_by_time(entry, events, bins)
             # TODO: should be recording detectors and various devices in binned
             # TODO: check the last edge is the correct length when it is truncated
             # TODO: duration is incorrect with masking and/or incomplete bins
@@ -226,6 +245,7 @@ def bin_events(measurement, bins, summary=False):
             summed[detector] = total
         CACHE[summed_key] = summed, duration
     return CACHE[summed_key]
+
 
 # CRUFT: code for old-style histograms
 def _bin_by_time_old_vsans(entry, bins):
@@ -250,6 +270,19 @@ def _bin_by_time_old_vsans(entry, bins):
             binned[name] = data
     return binned
 
+def _bin_by_time(events, edges):
+    nbins = len(edges) - 1
+    binned = {}
+    for name, detector in events.items():
+        dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']
+        print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
+        #print(edges)
+        ny, nx = dims
+        time_bins = np.searchsorted(edges, ts)
+        data = np.zeros((ny, nx, nbins+2))
+        np.add.at(data, (y, x, time_bins), 1)
+        binned[name] = data[:, :, 1:-1]
+    return binned
 
 def request_key(request):
     data = request.model_dump_json()
@@ -268,7 +301,7 @@ def check():
     metadata = get_metadata(measurement)
     #print("metadata", metadata)
     bins = client.time_linbins(metadata, interval=5)
-    request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
+    request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
     summary = get_summary_time(request)
     #print("summary", summary)
     index = np.searchsorted(bins.edges, 500.)
@@ -289,18 +322,21 @@ def check2():
     with event_capture.kafka_consumer() as consumer:
         event_capture.fetch_events_for_file(consumer, nexusfile, datapath=path)
 
+def check3():
+    from . import client
+    event_capture.setup()
+    path = "vsans/202102/27861/data"
+    nexusfile = "sans72110.nxs.ngv"
+    measurement = models.Measurement(filename=nexusfile, path=path, point=0)
+    metadata = get_metadata(measurement)
+    bins = client.time_linbins(metadata, interval=501)
+    request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
+    hdf = get_timebin_nexus(request)
+    with open('/tmp/end-to-end.hdf', 'wb') as fd:
+        fd.write(base64.b64decode(hdf.base64_data))
+
 # TODO: cache a version number, clearing the cache if there is a version mismatch
-def main():
-    import sys
-    # TODO: admit early that we need an options parser
-    if "clear" in sys.argv[1:]:
-        CACHE.clear()
-    elif "check" in sys.argv[1:]:
-        check()
-    elif "check2" in sys.argv[1:]:
-        check2()
-    else:
-        print("""
+usage = """
 Usage: server clear|check
 
 clear: Empties any caches associated with the data. This should happen
@@ -313,7 +349,21 @@ check: Runs some simple event processing to make sure that the pieces
 To run the actual server for responding to web requests use uvicorn:
 
     uvicorn event_processing.rebinning_api.server:app
- """)
+ """
+
+def main():
+    import sys
+    # TODO: admit early that we need an options parser
+    if "clear" in sys.argv[1:]:
+        CACHE.clear()
+    elif "check" in sys.argv[1:]:
+        check()
+    elif "check2" in sys.argv[1:]:
+        check2()
+    elif "check3" in sys.argv[1:]:
+        check3()
+    else:
+        print(usage)
 
 if __name__ == "__main__":
     main()
