@@ -551,13 +551,16 @@ async def index(client: Client):
                     # print('setting start and end: ', start, end, time_bin_settings.start, time_bin_settings.end)
                     update_binning_start_end()
 
-            with ui.element('div').classes('flex w-full gap-2'):
-                summary_plot = ui.plotly(summary_fig).classes("flex-1")
-                # summary_plot.bind_visibility_from(binning_state, 'fetching_summary', backward=lambda v: not v)
-                summary_plot.on('plotly_relayout', handle_box_draw)
-                summary_plot.on('plotly_click', handle_click)
-
-                frame_plot = ui.plotly(frame_fig).classes('flex-1 h-full')
+            with ui.row().classes('w-full'):
+                with ui.column().classes('flex-1'):
+                    with ui.element('div').classes('w-full h-96 min-h-96'):
+                        summary_plot = ui.plotly(summary_fig)
+                        summary_plot.bind_visibility_from(binning_state, 'fetching_summary', backward=lambda v: not v)
+                        summary_plot.on('plotly_relayout', handle_box_draw)
+                        summary_plot.on('plotly_click', handle_click)
+                with ui.column().classes('flex-1'):
+                    with ui.element('div').classes('w-full h-96 min-h-96'):
+                        frame_plot = ui.plotly(frame_fig)
 
                    
             def show_frame(det_name: str, point_number: int):
