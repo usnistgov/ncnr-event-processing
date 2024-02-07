@@ -26,25 +26,12 @@ app = FastAPI()
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
 
-CACHE_VERSION = "0.2"
 def start_cache():
     cache = diskcache.Cache(
         CACHE_PATH, 
         size_limit=CACHE_SIZE,
         eviction_policy='least-recently-used',
         )
-
-    # TODO: make version part of the hash and let LRU clean it up
-    version_file = Path(CACHE_PATH) / "version.txt"
-    if version_file.exists():
-        disk_version = version_file.read_text()
-        if disk_version != CACHE_VERSION:
-            logging.info(f"Updating cache from {disk_version} to {CACHE_VERSION}")
-            cache.clear()
-            version_file.write_text(CACHE_VERSION)
-    else:
-        cache.clear() # CRUFT: harmless, but clears out Brian's cache the first time
-        version_file.write_text(CACHE_VERSION)
     return cache
 CACHE = start_cache()
 
