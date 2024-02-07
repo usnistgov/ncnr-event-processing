@@ -278,9 +278,9 @@ def _bin_by_time(events, edges):
         ##print(edges[:5], edges[-5:])
         #print(edges)
         ny, nx = dims
-        time_bins = np.searchsorted(edges, ts)
+        index = np.searchsorted(edges, ts)
         data = np.zeros((ny, nx, nbins+2), 'int32')
-        np.add.at(data, (y, x, time_bins), 1)
+        np.add.at(data, (y, x, index), 1)
         binned_detectors[name] = data[:, :, 1:-1]
         print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
     result['detectors'] = binned_detectors
@@ -370,17 +370,17 @@ def _bin_strobed(events, edges):
         ##print(edges[:5], edges[-5:])
         #print(edges)
         ny, nx = dims
-        time_bins = np.searchsorted(edges, ts-triggers)
+        index = np.searchsorted(edges, ts-triggers)
         data = np.zeros((ny, nx, nbins+2), 'int32')
-        np.add.at(data, (y, x, time_bins), 1)
+        np.add.at(data, (y, x, index), 1)
         binned[name] = data[:, :, 1:-1]
         print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned[name].sum():<8d}")
 
     monitor_ts = events.get('monitors', None)
     if monitors:
-        time_bins = np.searchsorted(edges, monitor_ts-triggers)
+        index = np.searchsorted(edges, monitor_ts-triggers)
         data = np.zeros(nbins+2, 'int32')
-        np.add.at(data, time_bins, 1)
+        np.add.at(data, index, 1)
         result['monitors'] = data
 
     devices = events.get(devices, {})
@@ -431,6 +431,90 @@ def _bin_strobed(events, edges):
         # for over the samples within the bin. We need to do this anyway for
         # max/min/mean.
     result['devices'] = binned_devices
+    return result
+
+def _bin_by_device(name, events, edges, hysterisis=True):
+    device = events['devices'][name]
+    device_ts, device_value = device['ts'], device['value']
+
+    # Find value bin for each value in the log, then use this to find the
+    # change points where the consecutive values are in different bins.
+    # Interpolate between these change points to find all bin edges, tagged
+    # with the bin number. Sum the intervals according to bin number. This
+    # is the time per bin.
+    # TODO: verify that poll values extend beyond measurement duration
+    # TODO: use numba for the loop (or torch equivalent?)
+    # TODO: what happens when value range exceeds bin range?
+    # TODO: breaks if there are no change points in value array
+    # TODO: maybe smooth the device values before finding transitions
+    index = np.searchsorted(edges, device_value)
+    change = np.argwhere(np.diff(index) != 0)[:, 0]
+    # Start with timestamp and bin index of the first polled value.
+    # Guess the initial direction from the direction of the first change point.
+    # Note: could use the difference value 0 and value 1 but it might be flat.
+    # Note: might get a lot of flips if polling is noisy near a transition value
+    pairs = [(device_ts[0], index[0], index[change[0]] > index[0])]
+    for k in change:
+        current_bin, next_bin = index[k], index[k+1]
+        up = current_bin < next_bin
+        tl, tr = device_ts[k:k+1]
+        vl, vr = device_value[k:k+1]
+        slope = (tr-tl)/(vl-vr)
+        delta = 1 if up else -1
+        for edge_index in range(current_bin+delta, next_bin, delta):
+            edge_value = edges[edge_index]
+            edge_ts = ((edge_value) - vl)/(vr - vl) * (tr-tl) + tl
+            pairs.append((edge_ts, edge_index, up))
+    pairs.append((device_ts[-1], index[-1], False))  # we don't use up/down for final
+    # Turn transition coordinates into vectors
+    bin_ts, bin_index, bin_up = zip(*pairs)
+    # Limit to start/end of the measurement
+    start_index, end_index = np.searchsorted(bin_ts, [0, duration])
+    # Find intervals between each change
+    intervals = bin_ts[start_index:end_index+1]
+    intervals[0], intervals[-1] = 0, duration
+    intervals = np.diff(intervals)
+    # Accumulate intervals, using two arrays if directional
+    active = slice(start_index, end_index)
+    if directional:
+        count_time = np.zeros((nbins,2), dtype='float32')
+        np.add.at(count_time, (bin_index[active],bin_up[active]), intervals)
+    else:
+        count_time = np.zeros((nbins,), dtype='float32')
+        np.add.at(count_time, (bin_index[active],), intervals)
+
+    detectors = events.get('detectors', {})
+    binned = {}
+    for name, detector in detectors.items():
+        dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']
+        #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
+        ##print(edges[:5], edges[-5:])
+        #print(edges)
+        ny, nx = dims
+        value = np.interp(ts, device_ts, device_value)
+        index = np.searchsorted(edges, value)
+        if directional:
+            data = np.zeros((ny, nx, nbins+2, 2), 'int32')
+            up = bin_up[np.searchsorted(bin_ts, ts)]
+            np.add.at(data, (y, x, index, up), 1)
+        else:
+            data = np.zeros((ny, nx, nbins+2), 'int32')
+            np.add.at(data, (y, x, index), 1)
+        binned[name] = data[:, :, 1:-1]
+
+    monitor_ts = events.get('monitors', None)
+    if monitors:
+        value = np.interp(ts, device_ts, device_value)
+        index = np.searchsorted(edges, value)
+        if directional:
+            up = bin_up[np.searchsorted(bin_ts, ts)]
+            data = np.zeros((nbins+2, 2), 'int32')
+            np.add.at(data, (index, up), 1)
+        else:
+            data = np.zeros((nbins+2,), 'int32')
+            np.add.at(data, (index, ), 1)
+        result['monitors'] = data
+
     return result
 
 def request_key(request):
