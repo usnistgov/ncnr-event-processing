@@ -420,7 +420,7 @@ def _cleanup_vsans(entry, raw_events):
         #print(f"times: {times.min()/1e9:.3f}:{times.max()/1e9:.3f} relative to {int(start//1e9)}")
         # TODO: correct times for time of flight from wavelength and distance
         events[f"detector_{name}"] = dict(dims=dims, ts=times, x=x, y=y)
-    return events
+    return dict(detectors=events)
 
 def process_trigger(message, db):
     record = TIMING_SCHEMA(message)

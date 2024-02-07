@@ -21,14 +21,19 @@ def nexus_entries(nexus):
     #print({k: list(v.attrs.items()) for k, v in nexus.items()})
     return list(k for k, v in nexus.items() if v.attrs['NX_class'] == 'NXentry')
 
-def nexus_dup(entry, counts, duration, bins):
+def nexus_dup(entry, binned, bins):
     #print("counts", counts)
+    detectors = binned['detectors']
     replacement_target = nexus_detector_replacement(entry)
     replacement = {
-        v: counts[k] for k, v in replacement_target.items()
+        v: detectors[k] for k, v in replacement_target.items()
     }
     count_time = entry["control/count_time"]
-    replacement[count_time.attrs["target"]] = duration
+    replacement[count_time.attrs["target"]] = binned['count_time']
+    if 'monitors' in binned:
+        monitor_counts = entry["control/monitor_counts"]
+        replacement[monitor_counts.attrs["target"]] = binned['monitors']
+    # TODO: device values not offered up as replacements
 
     bio = io.BytesIO()
     with h5py.File(bio, "w") as target:

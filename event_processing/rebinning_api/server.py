@@ -10,6 +10,7 @@ from fastapi.responses import Response, StreamingResponse
 #from dateutil.parser import isoparser
 import numpy as np
 import diskcache
+import scipy.integrate
 
 from . import models
 from . import data_cache
@@ -20,12 +21,12 @@ from . import event_capture
 
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
-CACHE_VERSION = "0.2"
 CACHE_SIZE = int(100e9) 
 app = FastAPI()
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
 
+CACHE_VERSION = "0.2"
 def start_cache():
     cache = diskcache.Cache(
         CACHE_PATH, 
@@ -33,6 +34,7 @@ def start_cache():
         eviction_policy='least-recently-used',
         )
 
+    # TODO: make version part of the hash and let LRU clean it up
     version_file = Path(CACHE_PATH) / "version.txt"
     if version_file.exists():
         disk_version = version_file.read_text()
@@ -129,15 +131,14 @@ def get_summary_time(request: models.SummaryTimeRequest):
     return get_summary(request.measurement, request.bins)
 
 def get_summary(measurement, bins):
-    summed, duration = bin_events(measurement, bins, summary=True)
-    # TODO: need duration from other event binners
+    result = bin_events(measurement, bins, summary=True)
     devices = {}
     monitor = None
     reply = models.SummaryReply(
         measurement=measurement,
         bins=bins,
-        duration=duration,
-        counts=summed,
+        duration=result['count_time'],
+        counts=result['detectors'],
         monitor=monitor,
         devices=devices,
     )
@@ -153,7 +154,8 @@ def get_timebin_frame_range(start: int, end: int, request: models.SummaryTimeReq
     return get_frame_range(request.measurement, request.bins, start, end)
 
 def get_frame_range(measurement, bins, start, end):
-    counts, duration = bin_events(measurement, bins, summary=False)
+    binned = bin_events(measurement, bins, summary=False)
+    counts = binned['detectors']
     data = {k: v[..., start:end] for k, v in counts.items()}
     reply = models.FrameReply(
         data=data,
@@ -176,10 +178,10 @@ def get_nexus(measurement, bins):
     # TODO: maybe provide "explode" option to split each bin to a different file
     # TODO: check that there is only one entry with one point
     # TODO: replace monitor, and any devices that are binned
-    counts, duration = bin_events(measurement, bins, summary=False)
+    binned = bin_events(measurement, bins, summary=False)
     entry = nexus_util.open_nexus_entry(measurement)
     try:
-        data = nexus_util.nexus_dup(entry, counts, duration, bins)
+        data = nexus_util.nexus_dup(entry, binned, bins)
     finally:
         entry.file.close()
     reply = models.NexusReply(
@@ -194,26 +196,27 @@ def bin_events(measurement, bins, summary=False):
 
     key = (request_key(measurement), request_key(bins))
     #print("Key:", key)
-    raw_events_key = (key[0], "raw")  # events keyed by entry, not bin spec
-    events_key = (key[0], "events")
-    binned_key = (*key, "binned")   # binning keyed by both entry and bin spec
-    summed_key = (*key, "summed")
-    if 0 or binned_key not in CACHE:
+    # Increment version number if the data changes
+    raw_events_key = (key[0], "raw", "v1")  # events keyed by entry, not bin spec
+    events_key = (key[0], "events", "v1")
+    binned_key = (*key, "binned", "v1")   # binning keyed by both entry and bin spec
+    summed_key = (*key, "summed", "v1")
+    if binned_key not in CACHE:
         #print("processing events")
         entry = nexus_util.open_nexus_entry(measurement)
         try:
             # CRUFT: we are allowing some old vsans histograms to run for demo purposes.
             if measurement.filename.startswith('sans') and measurement.filename < "sans72000":
-                binned = _bin_by_time_old_vsans(entry, bins)
+                result = _bin_by_time_old_vsans(entry, bins)
             else:
                 # TODO: drop raw events cache once we have event_cleanup working for everything
-                if 0 or raw_events_key not in CACHE:
+                if raw_events_key not in CACHE:
                     print(f"fetching raw events for {entry.file.filename}")
                     event_capture.setup()  # in case it hasn't already been setup for sim
                     raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
                     print("caching raw events to", raw_events_key)
                     CACHE[raw_events_key] = raw_events
-                if 0 or events_key not in CACHE:
+                if events_key not in CACHE:
                     print("correcting")
                     raw_events = CACHE[raw_events_key]
                     #print(raw_events.__dict__)
@@ -222,28 +225,27 @@ def bin_events(measurement, bins, summary=False):
                     #print(events)
                     CACHE[events_key] = events
                 events = CACHE[events_key]
-                binned = _bin_by_time(events, bins.edges)
+                result = _bin_by_time(events, bins.edges)
                 #binned = _bin_by_time(entry, events, bins)
             # TODO: should be recording detectors and various devices in binned
-            # TODO: check the last edge is the correct length when it is truncated
-            # TODO: duration is incorrect with masking and/or incomplete bins
             edges = bins.edges
-            duration = (edges[1:] - edges[:-1])
         finally:
             entry.file.close()
-        CACHE[binned_key] = binned, duration
+        CACHE[binned_key] = result
 
     if not summary:
         return CACHE[binned_key]
 
     if summed_key not in CACHE:
         print("accumulating events")
-        binned, duration = CACHE[binned_key]
+        binned = CACHE[binned_key]
         summed = {}
-        for detector, data in binned.items():
+        for detector, data in binned['detectors'].items():
             total = np.sum(np.sum(data, axis=0), axis=0)
+            #print("in summary", detector, data, total)
             summed[detector] = total
-        CACHE[summed_key] = summed, duration
+        result = dict(detectors=summed, count_time=binned['count_time'])
+        CACHE[summed_key] = result
     return CACHE[summed_key]
 
 
@@ -268,13 +270,22 @@ def _bin_by_time_old_vsans(entry, bins):
             # form detector_FB, etc. from first letter of names
             name = f"detector_{z[0].upper()}{xy[0].upper()}"
             binned[name] = data
-    return binned
+    result = dict(detectors=binned, count_time=np.diff(bins.edges))
+    return result
 
 def _bin_by_time(events, edges):
+    # TODO: does not support masking
+    # TODO: check the last edge is the correct length when it is truncated
+    # TODO: duration is incorrect with masking and/or incomplete bins
+
     nbins = len(edges) - 1
     edges = np.asarray(edges*1e9, 'int64')
-    binned = {}
-    for name, detector in events.items():
+    result = {}
+    result['mode'] = 'time'
+
+    detectors = events['detectors']
+    binned_detectors = {}
+    for name, detector in detectors.items():
         dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']
         #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
         ##print(edges[:5], edges[-5:])
@@ -283,9 +294,157 @@ def _bin_by_time(events, edges):
         time_bins = np.searchsorted(edges, ts)
         data = np.zeros((ny, nx, nbins+2), 'int32')
         np.add.at(data, (y, x, time_bins), 1)
+        binned_detectors[name] = data[:, :, 1:-1]
+        print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
+    result['detectors'] = binned_detectors
+    result['count_time'] = np.diff(edges)*1e-9
+
+    monitors = events.get('monitors', None)
+    if monitors:
+        time_bins = np.searchsorted(edges, ts)
+        data = np.zeros(nbins+2, 'int32')
+        np.add.at(data, time_bins, 1)
+        result['monitors'] = data
+
+    # TODO: average per bin includes excluded values
+    # Compute average of device value within bins by looking at the difference
+    # in the cumulative integral at the edges and dividing by the duration of
+    # the bin.
+    devices = events.get('devices', {})
+    binned_devices = {}
+    for name, device in devices.items():
+        ts, value = device['ts'], device['value']
+        # Make sure the arrays are sorted (do it in event cleanup if necessary)
+        assert (ts[1:] > ts[:-1]).all()
+        # Insert values at edges of bins into the value array
+        index = np.searchsorted(ts, edges)
+        v_edge = np.interp(edges, ts, value) # Note: could reuse edge indices
+        ts = np.insert(ts, index, edges)
+        value = np.insert(value, index, v_edge)
+        # Find cumulative values at edge positions. Use trapezoid rule for
+        # integration because we are using linear interpolation to find the
+        # edge values.
+        cum_value = scipy.integrate.cumulative_trapezoid(value, ts)
+        cum_index = index + np.arange(len(edges))
+        avg = np.diff(cum_value[cum_index])/np.diff(edges)
+        binned_devices[name] = avg
+        # TODO: std, min, max
+        # Other statistics are tricky. For variance you need to compute the
+        # integral of (f(x)-avg)^2 over each interval. The trapezoidal integration
+        # functions will not work for this, though simpsons quadrature (which
+        # uses a quadratic model underneath) might. The end points are tricky
+        # since the function is dual-valued at these points (value - left avg and
+        # value - right avg). We might be able to do this with vector operations.
+        # but easier to drop into numba and do it with a simple for loop. We
+        # might even be able to do a parallel for over each bin, with a nested
+        # for over the samples within the bin. We need to do this anyway for
+        # max/min/mean.
+    result['devices'] = binned_devices
+
+    return result
+
+def _bin_strobed(events, edges):
+    # TODO: does not support masking
+    # TODO: use stobed with one trigger for time binning?
+    nbins = len(edges) - 1
+    edges = np.asarray(edges*1e9, 'int64')
+    result = {}
+    result['mode'] = 'strobe'
+
+    # Shift the T0 to an arbitrary phase point
+    offset = edges[0]
+    edges -= offset # edges is new, so we can update in place with -=
+
+    triggers = events.get('triggers', None)
+    if not triggers:
+        raise ValueError("Missing trigger information in datastream")
+
+    # TODO: can we update data from the cache inplace?
+    triggers = triggers + offset # Don't use += because triggers might be reused
+
+    if len(triggers) > 1:
+        delta = np.diff(triggers)
+        trigger_stats = dict(
+            n=len(triggers),
+            min=delta.min()/1e9, 
+            max=delta.max()/1e9, 
+            mean=delta.mean()/1e9,
+            dev=delta.std(ddof=1)/1e9,
+        )
+        result['trigger'] = trigger_stats
+
+    result['count_time'] = len(triggers)*np.diff(edges)*1e-9
+
+    detectors = events.get('detectors', {})
+    binned = {}
+    for name, detector in detectors.items():
+        dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']
+        #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
+        ##print(edges[:5], edges[-5:])
+        #print(edges)
+        ny, nx = dims
+        time_bins = np.searchsorted(edges, ts-triggers)
+        data = np.zeros((ny, nx, nbins+2), 'int32')
+        np.add.at(data, (y, x, time_bins), 1)
         binned[name] = data[:, :, 1:-1]
         print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned[name].sum():<8d}")
-    return binned
+
+    monitor_ts = events.get('monitors', None)
+    if monitors:
+        time_bins = np.searchsorted(edges, monitor_ts-triggers)
+        data = np.zeros(nbins+2, 'int32')
+        np.add.at(data, time_bins, 1)
+        result['monitors'] = data
+
+    devices = events.get(devices, {})
+    if not devices:
+        return result
+
+    # TODO: do we need device average values for strobed?
+    # Compute average of device value within bins by looking at the difference
+    # in the cumulative integral at the edges and dividing by the duration of
+    # the bin.
+    # Basically repeat the bins once every trigger, find the area between bins
+    # reshape to [ntriggers x nbins] then sum over triggers to get the total
+    # area. Normalize by ntriggers times edges. A bit of weirdness because
+    # this also forms the area between the end of one trigger and the beginning
+    # of the next.
+    # TODO: check what happens when trigger interval is shorter then bins width
+    strobed_edges = (triggers[:, None] + edges[None, :]).flatten()
+    binned_devices = {}
+    for name, device in devices.items():
+        ts, value = device['ts'], device['value']
+        # Make sure the arrays are sorted (do it in event cleanup if necessary)
+        assert (ts[1:] > ts[:-1]).all()
+        # Insert values at edges of bins into the value array
+        index = np.searchsorted(ts, strobed_edges)
+        v_edge = np.interp(strobed_edges, ts, value) # Note: could reuse edge indices
+        ts = np.insert(ts, index, strobed_edges)
+        value = np.insert(value, index, v_edge)
+        # Find cumulative values at edge positions. Use trapezoid rule for
+        # integration because we are using linear interpolation to find the
+        # edge values.
+        cum_value = scipy.integrate.cumulative_trapezoid(value, ts)
+        cum_index = index + np.arange(len(strobed_edges))
+        # Need one extra value because we have an extra column for the values
+        # between the one cycle and the start of the next.
+        total = np.concat((np.diff(cum_value[cum_index]), 0.))
+        summed = total.reshape((len(triggers),len(edges))).sum(axis=0)
+        avg = summed[:-1] / np.diff(edges) / len(triggers)
+        binned_devices[name] = avg
+        # TODO: std, min, max
+        # Other statistics are tricky. For variance you need to compute the
+        # integral of (f(x)-avg)^2 over each interval. The trapezoidal integration
+        # functions will not work for this, though simpsons quadrature (which
+        # uses a quadratic model underneath) might. The end points are tricky
+        # since the function is dual-valued at these points (value - left avg and
+        # value - right avg). We might be able to do this with vector operations.
+        # but easier to drop into numba and do it with a simple for loop. We
+        # might even be able to do a parallel for over each bin, with a nested
+        # for over the samples within the bin. We need to do this anyway for
+        # max/min/mean.
+    result['devices'] = binned_devices
+    return result
 
 def request_key(request):
     data = request.model_dump_json()
