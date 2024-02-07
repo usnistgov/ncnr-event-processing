@@ -328,6 +328,27 @@ def event_cleanup(entry, raw_events):
         return _cleanup_vsans(entry, raw_events)
     raise NotImplementedError(f"Do not yet support events for {instrument}")
 
+# Velocity (m/s) <=> wavelength (A)
+#   lambda = h / p = h (eV) (J/eV) / ( m_n (kg) v (m/s) ) (10^10 A/m)
+# Since plancks constant is in eV
+#   lambda = (1e10 * h*electron_volt/(neutron_mass/N_A)) / velocity
+#: Planck's constant (eV s)
+plancks_constant = 4.13566733e-15 #(10) eV s
+#: Electron volt (J/eV)
+electron_volt = 1.602176487e-19 #(40) J / eV
+# From NIST Reference on Constants, Units, and Uncertainty
+#   http://physics.nist.gov/cuu/index.html
+# neutron mass = 1.008 664 915 97(43) u
+# atomic mass constant m_u = 1.660 538 782(83) x 10-27 kg
+#: neutron mass (u)
+neutron_mass = 1.00866491597 #(43) u
+#: atomic mass constant (kg / u)
+atomic_mass_constant = 1.660538782e-27 #(83) kg / u
+VELOCITY_FACTOR = (plancks_constant*electron_volt
+                   / (neutron_mass * atomic_mass_constant)) * 1e10
+def neutron_velocity(wavelength):
+    return VELOCITY_FACTOR / wavelength
+
 def _cleanup_vsans(entry, raw_events):
     make_table = False
     # Table data extracted from sans72110.nxs.ngv
@@ -363,7 +384,8 @@ def _cleanup_vsans(entry, raw_events):
             logging.warn(f"Missing {entry.name}/instrument/detector_{name} in {datapath}")
             continue
         distance = nxdetector["distance"][0]
-        #print(f"detector_{name}/distance: {distance}")
+        travel_time = int(1e8 * distance / neutron_velocity(wavelength)) # cm / (m/s) * 1e8 = ns
+        #print(f"detector_{name}/distance: {distance} travel time {int(travel_time/1e6)} ms")
         DAS = entry[nxdetector["data"].attrs['target']].parent
         dims = tuple(DAS['dimension'][()])
         #print(f"detector_{name}->{DAS.name} {dims=}")
@@ -394,7 +416,7 @@ def _cleanup_vsans(entry, raw_events):
             raise RuntimeError(f"Bad pixel id in {datapath}")
         #print(f"times: {times.min()}:{times.max()} relative to {start}")
         #print(f"subtracting {start} from {times[0]} = {times[0]-start}")
-        times -= start
+        times -= start + travel_time
         #print(f"times: {times.min()/1e9:.3f}:{times.max()/1e9:.3f} relative to {int(start//1e9)}")
         # TODO: correct times for time of flight from wavelength and distance
         events[f"detector_{name}"] = dict(dims=dims, ts=times, x=x, y=y)
