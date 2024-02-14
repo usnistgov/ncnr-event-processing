@@ -2,7 +2,7 @@
   <q-page class="full-height column">
     <q-tabs
       class="w-full"
-      v-model="tab"
+      v-model="active_tab"
       dense
       >
       <q-tab name="experiment_search" label="Select Experiment" key="experiment_search"></q-tab>
@@ -15,11 +15,11 @@
       <q-input class="q-px-md" v-model="selected_filename" readonly label="Filename"></q-input>
       <q-input class="q-px-md" v-model="selected_path" readonly label="File Path" :input-style="{width:'20em'}"></q-input>
       <q-input class="q-px-md" v-model="metadata.duration" readonly label="Duration"></q-input>
-      <q-btn v-if="selected_filename && selected_path" style="height: 1em;" color="positive" label="Show Summary" />
-      <q-btn v-if="selected_filename && selected_path" style="height: 1em;" class="q-mx-md" color="secondary" label="Rebin + Download" />
+      <!-- <q-btn v-if="selected_filename && selected_path" style="height: 1em;" color="positive" label="Show Summary" />
+      <q-btn v-if="selected_filename && selected_path" style="height: 1em;" class="q-mx-md" color="secondary" label="Rebin + Download" /> -->
     </div>
     <!-- <q-separator/> -->
-    <q-tab-panels v-model="tab" class="column col q-py-sm " animated keep-alive>
+    <q-tab-panels v-model="active_tab" class="column col q-py-sm " animated keep-alive>
       <q-tab-panel class="q-px-md" name="experiment_search" key="experiment_search">
           <experiments-table />
       </q-tab-panel>
@@ -40,10 +40,7 @@ import ExperimentsTable from 'components/ExperimentsTable.vue';
 import DatafilesTable from 'src/components/DatafilesTable.vue';
 import RebinningParams from 'src/components/RebinningParams.vue';
 
-import { selected_experiment, selected_filename, selected_path, metadata } from 'src/store';
-
-import { ref } from 'vue';
-const tab = ref('experiment_search')
+import { selected_experiment, selected_filename, selected_path, metadata, active_tab } from 'src/store';
 
 </script>
 
