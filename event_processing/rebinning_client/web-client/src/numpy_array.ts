@@ -1,3 +1,18 @@
+let get_native_littleendian = () => {
+  let uInt32 = new Uint32Array([0x11223344]);
+  let uInt8 = new Uint8Array(uInt32.buffer);
+
+  if(uInt8[0] === 0x44) {
+      return true;
+  } else if (uInt8[0] === 0x11) {
+      return false;
+  } else {
+    throw new Error('Maybe mixed-endian?');
+  }
+};
+
+const is_native_littleendian = get_native_littleendian();
+
 export class NumpyArray {
   data: string
   dtype: string
@@ -10,9 +25,31 @@ export class NumpyArray {
   }
 
   to_typed_array() {
-    const accessor = getAccessor(this.dtype);
+    const { endianness, typestr, lengthstr } = parse_dtype(this.dtype);
+    const is_littleendian = (endianness !== '>');
+    const constructor_key = typestr + lengthstr;
+    if (!(constructor_key in typed_array_lookup)) {
+      throw new Error(`dtype ${constructor_key} not recognized`);
+    }
+    
+    const constructor = typed_array_lookup[constructor_key];
     const bytes = base64ToBytes(this.data);
-    return new accessor(bytes.buffer);
+
+    // flip bytes if needed:
+    if (is_littleendian != is_native_littleendian && lengthstr) {
+      const step = parseInt(lengthstr, 10);
+      const view = new DataView(bytes.buffer);
+      const buflength = bytes.buffer.byteLength;
+      const ntype = number_type[constructor_key];
+      const getter = view[`get${ntype}`];
+      const setter = view[`set${ntype}`];
+      for (let i=0; i<buflength; i+=step) {
+        const num_out = getter(i, is_littleendian);
+        setter(i, num_out, is_native_littleendian);
+      }
+    }
+    const typed_array = new constructor(bytes.buffer);
+    return typed_array;
   }
 
   to_array() {
@@ -20,71 +57,54 @@ export class NumpyArray {
     return create_nested_array(num_array, this.shape)
   }
 
-
-  from_array(array_in: number[]) {
-    // only handles 1-d arrays for now, and con
-
+  static from_array(array_in: number[]) {
+    // only handles 1-d arrays for now, and automatically uses float64
+    const shape = [array_in.length];
+    const dtype = `${(is_native_littleendian) ? '<' : '>'}f8`;
+    const typed_array = new Float64Array(array_in);
+    const data = btoa(new Uint8Array(typed_array.buffer).reduce((d,b) => d + String.fromCharCode(b), ''));
+    return new this({data, dtype, shape});
   }
 }
 
-function map_reverse<Key, Value>(map: Map<Key, Value>): Map<Value, Key> {
-  return new Map(Array.from(map.entries()).map(([k, v]) => [v, k]));
+const typed_array_lookup = {
+  'b': Int8Array,
+  'B': Uint8Array,
+  'i2': Int16Array,
+  'i4': Int32Array,
+  'i8': BigInt64Array,
+  'u2': Uint16Array,
+  'u4': Uint32Array,
+  'u8': BigUint64Array,
+  'f4': Float32Array,
+  'f8': Float64Array,
 }
 
-const int_fmts = new Map([[1, 'b'], [2, 'h'], [4, 'i'], [8, 'q']]);
-const float_fmts = new Map([[2, 'e'], [4, 'f'], [8, 'd']]);
-const fmts_float = map_reverse(float_fmts);
-const fmts_int = map_reverse(int_fmts);
+const number_type = {
+  'b': 'Int8',
+  'B': 'Uint8',
+  'i2': 'Int16',
+  'i4': 'Int32',
+  'i8': 'BigInt64',
+  'u2': 'Uint16',
+  'u4': 'Uint32',
+  'u8': 'BigUint64',
+  'f4': 'Float32',
+  'f8': 'Float64',
+}
 
-
-function getAccessor(dtype_str: string): TypedArrayConstructor {
-  const match = dtype_str.match(/^([<>|]?)([bhiqefdsBHIQS])([0-9]*)$/);
+function parse_dtype(dtype_str: string) {
+  const match = dtype_str.match(/^([<>|]?)([bifuB])([248]?)$/);
   if (match == null) {
     throw dtype_str + " is not a recognized dtype"
   }
-  const [full, endianness, typestr, length] = match;
-  const lower_typestr = typestr.toLowerCase();
-  if (fmts_int.has(lower_typestr)) {
-    const size = (fmts_int.get(lower_typestr) as number);
-    const signed = (lower_typestr == typestr);
-    if (size === 8) {
-      return (signed) ? BigInt64Array : BigUint64Array;
-    }
-    else if (size === 4) {
-      return (signed) ? Int32Array : Uint32Array;
-    }
-    else if (size === 2) {
-      return (signed) ? Int16Array : Uint16Array;
-    }
-    else { // size === 1
-      return (signed) ? Int8Array : Uint8Array;
-    }
-  }
-  else if (fmts_float.has(lower_typestr)) { // type ==== 1 (float)
-    const size = (fmts_float.get(lower_typestr) as number);
-    if (size === 8) {
-      return Float64Array;
-    }
-    else if (size === 4) {
-      return Float32Array;
-    }
-    else {
-      throw new Error(`Float${size * 8} not supported`);
-    }
-  }
-  else if (lower_typestr === 's') {
-    const size = (length === '') ? 4 : parseInt(length, 10);
-    const vlen = (length === '');
-    alert("don't have accessor for strings yet");
-    throw "don't have accessor for strings yet";
-  }
-  else {
-    throw "should never happen"
-  }
+  const [full, endianness, typestr, lengthstr] = match;
+  return { endianness, typestr, lengthstr };
 }
 
+
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
-interface NestedArray<T> extends Array<T | NestedArray<T>> { }
+export interface NestedArray<T> extends Array<T | NestedArray<T>> { }
 
 function create_nested_array<T>(value: T[], shape: number[]): NestedArray<T> {
   // check that shapes match:
