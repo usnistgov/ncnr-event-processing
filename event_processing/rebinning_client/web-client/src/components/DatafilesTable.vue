@@ -32,7 +32,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { api_get, ncnr_metadata_api, selected_experiment, selected_filename, selected_path, get_metadata } from 'src/store';
+import { api_get, ncnr_metadata_api, selected_experiment, selected_filename, selected_path, get_metadata, active_tab } from 'src/store';
 
 const endpoint = 'datafiles';
 const columns = [
@@ -64,7 +64,7 @@ const search_inputs = ref({
   filename: '',
 });
 
-function on_selection() {
+async function on_selection() {
   const r = rows.value;
   if (r.length > 0) {
     console.log(r[0]);
@@ -72,7 +72,8 @@ function on_selection() {
     selected_filename.value = filename;
     selected_path.value = localdir;
 
-    get_metadata();
+    await get_metadata();
+    active_tab.value = 'rebinning_params';
   }
   else {
     selected_filename.value = selected_path.value = ''
