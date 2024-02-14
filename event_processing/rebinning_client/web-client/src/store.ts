@@ -2,15 +2,16 @@ import { ref } from 'vue';
 import { NumpyArray } from './numpy_array';
 import { Meta } from 'quasar';
 
-export const ncnr_metadata_api = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1";
-// export const rebinning_api = "http://candorgpu.campus.nist.gov:8080";
-export const rebinning_api = "http://localhost:8000";
+export const ncnr_metadata_api = 'https://ncnr.nist.gov/ncnrdata/metadata/api/v1';
+// export const rebinning_api = 'http://candorgpu.campus.nist.gov:8080';
+export const rebinning_api = 'http://localhost:8000';
 
+type tab_names = 'experiment_search' | 'datafile_search' | 'rebinning_params';
+export const active_tab = ref<tab_names>('experiment_search');
 export const selected_experiment = ref('');
 export const selected_filename = ref('');
 export const selected_path = ref('');
 export const duration = ref(1);
-
 export const datafile_search_state = ref({
     'rows': [],
     'pagination': {
@@ -36,18 +37,24 @@ export const binning_state = ref({
 
 export async function api_post(base_api: string, endpoint: string, data: object) {
     const response = await fetch(`${base_api}/${endpoint}`, {
-        method: "POST", // *GET, POST, PUT, DELETE, etc.
-        mode: "cors", // no-cors, *cors, same-origin
-        cache: "no-cache", // *default, no-cache, reload, force-cache, only-if-cached
-        // credentials: "same-origin", // include, *same-origin, omit
+        method: 'POST', // *GET, POST, PUT, DELETE, etc.
+        mode: 'cors', // no-cors, *cors, same-origin
+        cache: 'no-cache', // *default, no-cache, reload, force-cache, only-if-cached
+        // credentials: 'same-origin', // include, *same-origin, omit
         headers: {
-            "Content-Type": "application/json",
+            'Content-Type': 'application/json',
             // 'Content-Type': 'application/x-www-form-urlencoded',
         },
-        redirect: "follow", // manual, *follow, error
-        referrerPolicy: "no-referrer", // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
-        body: JSON.stringify(data), // body data type must match "Content-Type" header
+        redirect: 'follow', // manual, *follow, error
+        referrerPolicy: 'no-referrer', // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
+        body: JSON.stringify(data), // body data type must match 'Content-Type' header
     });
+    if (response.headers.get('Content-Type') === 'application/json') {
+        return response.json();
+    }
+    else {
+        return response.arrayBuffer();
+    }
     return response.json(); // parses JSON response into native JavaScript objects
 }
 
@@ -61,7 +68,7 @@ export async function api_get(base_api: string, endpoint: string, data: object =
 export const all_instruments = ref([]);
 api_get(ncnr_metadata_api, 'instruments').then((result) => all_instruments.value = result);
 
-interface MetadataRequest {
+export interface MetadataRequest {
     // Name of the nexus file.
     filename: string,
     // Path to the data directory relative to data root. If None, then search
@@ -130,7 +137,7 @@ interface Sweep {
     cycles: number
 }
 
-interface TimeBins {
+export interface TimeBins {
     // """
     // Binning requires bin edges for the individual bins, as well as a mask
     // indicating which parts of the time series should be included. Use this
@@ -161,7 +168,13 @@ interface TimeBins {
     mode: string // = 'time'
 }
 
+export interface SummaryTimeRequest {
+    measurement: MetadataRequest,
+    bins: TimeBins,
+}
+
 export const metadata = ref<MetadataReply>({duration: 1});
+export const metadata_request = ref<MetadataRequest>();
 
 export async function get_metadata() {
   // do something
@@ -184,6 +197,7 @@ export async function get_metadata() {
     const metadata_reply: MetadataReply = await api_post(rebinning_api, 'metadata', request);
 
     metadata.value = metadata_reply;
-    console.log(metadata_reply);
+    metadata_request.value = request;
+    // console.log(metadata_reply);
   }
 }
