@@ -1,9 +1,16 @@
+import asyncio
 import base64
+import datetime
 import hashlib
+import io
+import json
 from pathlib import Path
+import re
+from typing import Annotated
+import uuid
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Form
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -177,7 +184,58 @@ def get_frame_range(measurement, bins, start, end):
 # ===================================
 @app.post("/timebin/nexus")
 def get_timebin_nexus(request: models.SummaryTimeRequest):
-    return get_nexus(request.measurement, request.bins)
+    data = get_nexus(request.measurement, request.bins)
+    reply = models.NexusReply(
+        base64_data=base64.b64encode(data),
+    )
+    return reply
+
+
+ACTIVE_DOWNLOADS = set()
+
+@app.get('/timebin/nexus_download_status/{download_id}')
+def get_download_status(download_id: str):
+    return (download_id in ACTIVE_DOWNLOADS)
+
+@app.post('/timebin/nexus_download')
+async def download_nexus_form(request_str: Annotated[str, Form()], download_id: Annotated[str, Form()] = ''):
+    """ post request coming from HTML form, that can trigger a download """
+    request_dict = json.loads(request_str)
+    request = models.SummaryTimeRequest(**request_dict)
+    if (download_id != ''):
+        ACTIVE_DOWNLOADS.add(download_id)
+
+    coro = asyncio.to_thread(get_nexus, request.measurement, request.bins)
+    data = await coro
+    orig_filename = request.measurement.filename
+    orig_path = Path(orig_filename)
+    file_suffixes = ''.join(orig_path.suffixes)
+    file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
+    new_filename = f"{file_stem}_rebinned{file_suffixes}"
+    buffer_size = 2**16 # 64K
+    async def result_streamer():
+        with io.BytesIO(data) as bio:
+            buffer = bio.read(buffer_size)
+            while buffer:
+                yield buffer
+                buffer = bio.read(buffer_size)
+        if (download_id != ''):
+            ACTIVE_DOWNLOADS.remove(download_id)
+
+    last_updated_pattern = "%a, %d %b %Y %H:%M:%S GMT"
+    last_modified = datetime.datetime.strftime(datetime.datetime.now(datetime.timezone.utc), last_updated_pattern)
+    content_length = str(len(data))
+    etag = hashlib.md5(f'{last_modified}-{content_length}'.encode(), usedforsecurity=False).hexdigest()
+    headers = {
+        'Content-Disposition': f'attachment; filename="{new_filename}"',
+        'Content-Type': 'application/x-hdf5',
+        'Content-Length': content_length,
+        'Last-Modified': last_modified,
+        'ETag': etag,
+        'Access-Control-Allow-Origin': '*',
+    }
+    return StreamingResponse(result_streamer(), headers=headers)
+
 
 def get_nexus(measurement, bins):
     """
@@ -196,10 +254,7 @@ def get_nexus(measurement, bins):
         data = nexus_util.nexus_dup(entry, counts, duration, bins)
     finally:
         entry.file.close()
-    reply = models.NexusReply(
-        base64_data=base64.b64encode(data),
-    )
-    return reply
+    return data
 
 
 def bin_events(measurement, bins, summary=False):
