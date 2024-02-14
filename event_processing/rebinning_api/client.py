@@ -148,9 +148,8 @@ def _lin_edges(duration, start, end, interval=None, nbins=None) -> models.vector
         end = duration + end
 
     if nbins is not None:
-        edges = np.arange(start, end, nbins+1)
+        edges = np.linspace(start, end, nbins+1)
     elif interval is not None:
-        nbins = (end - start) // interval
         edges = np.arange(start, end+interval, interval)
         if edges[-2] == duration: # last bin is full so don't need a partial bin more
             edges = edges[:-1]
