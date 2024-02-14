@@ -39,7 +39,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { api_get, ncnr_metadata_api, all_instruments, selected_experiment } from 'src/store';
+import { api_get, ncnr_metadata_api, all_instruments, selected_experiment, active_tab } from 'src/store';
 
 const endpoint = 'experiments';
 const columns = [
@@ -85,6 +85,7 @@ function on_selection(event: { keys: string[] }) {
   const { keys } = event;
   if (keys.length > 0) {
     selected_experiment.value = keys[0];
+    active_tab.value = 'datafile_search';
   }
 }
 
