@@ -16,6 +16,7 @@
     "@quasar/cli": "^2.3.0",
     "@quasar/extras": "^1.16.4",
     "@types/plotly.js": "^2.29.0",
+    "plotly-interactors": "github:bmaranville/plotly-interactors",
     "plotly.js-dist": "^2.29.0",
     "quasar": "^2.8.0",
     "uuid": "^9.0.1",
