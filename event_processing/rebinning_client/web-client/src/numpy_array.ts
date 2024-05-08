@@ -96,7 +96,7 @@ const number_type = {
 function parse_dtype(dtype_str: string) {
   const match = dtype_str.match(/^([<>|]?)([bifuB])([248]?)$/);
   if (match == null) {
-    throw dtype_str + " is not a recognized dtype"
+    throw dtype_str + ' is not a recognized dtype';
   }
   const [full, endianness, typestr, lengthstr] = match;
   return { endianness, typestr, lengthstr };
