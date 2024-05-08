@@ -1,6 +1,6 @@
 <template>
-  <div class="q-px-md items-stretch">
-    <div class="row flex items-stretch">
+  <div class="q-pa-md column col">
+    <div class="row col">
       <div class="col-auto">
         <q-select
           v-model="search_inputs.instrument_name"
@@ -17,10 +17,10 @@
           @update:model-value="search"
         ></q-input>
       </div>
-      <div class="col flex-1">
+      <div class="col">
         <q-table
-          class="my-sticky-column-table my-sticky-header-table"
-          flat bordered dense
+          class="sticky-header-table-experiments my-sticky-column-table"
+          flat bordered
           :rows="rows"
           :columns="columns"
           row-key="id"
@@ -28,7 +28,6 @@
           v-model:selected="selected"
           @selection="on_selection"
           @row-dblclick="row_dblclick"
-          wrap-cells
           v-model:pagination="pagination"
           @request="pagination_request_handler"
         />
@@ -44,8 +43,8 @@ import { api_get, ncnr_metadata_api, all_instruments, selected_experiment, activ
 const endpoint = 'experiments';
 const columns = [
     {'name': 'experiment_id', 'label': 'Experiment ID', 'field': 'id', 'required': true, 'align': 'left', 'style': 'width: 8em;'},
-    {'name': 'title', 'label': 'Title', 'field': 'title', 'align': 'left', 'style': 'max-width:2px;'},
-    {'name': 'participants', 'label': 'Participants', 'field': 'participant_names', 'align': 'left', 'format': (value: string) => JSON.parse(value).join(', '), 'style': 'max-width:2px;'},
+    {'name': 'title', 'label': 'Title', 'field': 'title', 'align': 'left', 'style': 'min-width:2px;'},
+    {'name': 'participants', 'label': 'Participants', 'field': 'participant_names', 'align': 'left', 'format': (value: string) => JSON.parse(value).join(', '), 'style': 'min-width:2px;'},
 ]
 
 interface Row {
@@ -144,9 +143,15 @@ async function pagination_request_handler(request: {pagination: { rowsPerPage: n
 </script>
 
 <style lang="sass">
-.my-sticky-header-table
+.q-table__bottom.row 
+  justify-content: start
+
+.q-table__separator
+  flex: 0 0 0
+
+.sticky-header-table-experiments
   /* height or max-height is important */
-  max-height: 100%
+  height: calc(100vh - 192px)
 
   .q-table__top,
   .q-table__bottom,
@@ -175,11 +180,11 @@ async function pagination_request_handler(request: {pagination: { rowsPerPage: n
   /* specifying max-width so the example can
     highlight the sticky column on any browser window */
 
-  /* thead tr:first-child th:first-child
-     bg color is important for th; just specify one
-     background-color: white */
+  thead tr:first-child th:first-child
+    /*  bg color is important for th; just specify one
+    background-color: white
 
-  td:first-child
+  td:first-child, td:nth-child(2)
     background-color: white
 
   th:first-child,
@@ -187,4 +192,13 @@ async function pagination_request_handler(request: {pagination: { rowsPerPage: n
     position: sticky
     left: 0
     z-index: 1
+
+  th:nth-child(2),
+  td:nth-child(2)
+    position: sticky
+    left: 5.5em
+    z-index: 1
+
+  th:first-child, th:nth-child(2)
+    z-index: 3 !important
 </style>

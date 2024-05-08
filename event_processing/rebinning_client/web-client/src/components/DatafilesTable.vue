@@ -1,46 +1,68 @@
 <template>
-  <div class="q-px-md">
-    <div class="row flex">
-      <div class="col-auto">
-        <q-input
-          v-model="search_inputs.filename"
-          debounce="500"
-          label="Filename Search"
-          clearable
-          @update:model-value="search"
-        ></q-input>
+  <div class="col column q-pa-md">
+
+      <div class="row col">
+        <div class="col-auto">
+          <q-input
+            v-model="search_inputs.filename"
+            debounce="500"
+            label="Filename Search"
+            clearable
+            @update:model-value="search"
+          ></q-input>
+        </div>
+        <div class="col">
+          <q-table
+            class="sticky-header-table-datafiles my-sticky-column-table"
+            flat bordered
+            :rows="rows_with_metadata"
+            :columns="all_columns"
+            row-key="filename"
+            selection="single"
+            v-model:selected="selected"
+            @selection="on_selection"
+            @row-dblclick="row_dblclick"
+            v-model:pagination="pagination"
+            @request="pagination_request_handler"
+            /> 
+        </div>
       </div>
-      <div class="col flex-1">
-        <q-table
-          class="my-sticky-column-table my-sticky-header-table"
-          flat bordered
-          :rows="rows"
-          :columns="columns"
-          row-key="filename"
-          selection="single"
-          v-model:selected="selected"
-          @selection="on_selection"
-          @row-dblclick="row_dblclick"
-          wrap-cells
-          v-model:pagination="pagination"
-          @request="pagination_request_handler"
-        />
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { api_get, ncnr_metadata_api, selected_experiment, selected_filename, selected_path, get_metadata, active_tab } from 'src/store';
 
 const endpoint = 'datafiles';
-const columns = [
+const columns: {name: string, label: string, field?: string, required?: boolean, metadata?: string, ':field'?: string }[] = [
   { 'name': 'filename', 'label': 'Filename', 'field': 'filename', 'required': true },
   { 'name': 'cycle', 'label': 'Rx Cycle', 'field': 'rxcycle_id' },
   { 'name': 'start_date', 'label': 'Start Date', 'field': 'start_date' },
 ]
 
+const rows_with_metadata = computed(() => {
+  return rows.value.map(row => {
+    const metadata = row.metadata ? JSON.parse(row.metadata) : {};
+    return {...row, metadata};
+  });
+});
+
+const all_columns = computed(() => {
+  const keys = new Set<string>();
+  for (const row of rows_with_metadata.value) {
+    for (const key in row.metadata) {
+      keys.add(key);
+    }
+  }
+
+  const extra_cols = [];
+  for (const key of keys) {
+    const col_def = {'name': key, 'label': key, field: (row: Row) => row?.metadata?.[key]};
+    extra_cols.push(col_def);
+  }
+  return columns.concat(extra_cols);
+})
 
 interface APISearchParams {
   offset: number,
@@ -50,7 +72,8 @@ interface APISearchParams {
   full_count?: boolean
 }
 
-const rows = ref([]);
+type Row = {filename: string, rxcycle_id: string, start_date: string, metadata?: string};
+const rows = ref<Row[]>([]);
 const selected = ref([]);
 const pagination = ref({
   'rowsPerPage': 10,
@@ -118,9 +141,16 @@ async function pagination_request_handler(request: {pagination: { rowsPerPage: n
 </script>
 
 <style lang="sass">
-.my-sticky-header-table
+.q-table__bottom.row 
+  justify-content: start
+
+.q-table__separator
+  flex: 0 0 0
+
+.sticky-header-table-datafiles
   /* height or max-height is important */
-  max-height: 100%
+  height: calc(100vh - 192px)
+  width: calc(100vw - 243px)
 
   .q-table__top,
   .q-table__bottom,
@@ -130,7 +160,7 @@ async function pagination_request_handler(request: {pagination: { rowsPerPage: n
 
   thead tr th
     position: sticky
-    z-index: 2
+    z-index: 1
   thead tr:first-child th
     top: 0
     z-index: 2
@@ -145,20 +175,4 @@ async function pagination_request_handler(request: {pagination: { rowsPerPage: n
     /* height of all previous header rows */
     scroll-margin-top: 48px
 
-.my-sticky-column-table
-  /* specifying max-width so the example can
-    highlight the sticky column on any browser window */
-
-  /* thead tr:first-child th:first-child
-     bg color is important for th; just specify one
-     background-color: white */
-
-  td:first-child
-    background-color: white
-
-  th:first-child,
-  td:first-child
-    position: sticky
-    left: 0
-    z-index: 1
 </style>
