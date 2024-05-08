@@ -1,7 +1,7 @@
 <template>
-  <q-page class="full-height column">
+  <q-page class="row column col">
     <q-tabs
-      class="w-full"
+      class="row"
       v-model="active_tab"
       dense
       >
@@ -10,7 +10,7 @@
       <q-tab name="rebinning_params" label="Rebinning Params" key="rebinning_params"></q-tab>
     </q-tabs>
     <q-separator/>
-    <div class="row q-px-lg items-center">
+    <div class="row q-px-lg items-center flex-1">
       <q-input class="q-px-md" v-model="selected_experiment" readonly label="Experiment ID"></q-input>
       <q-input class="q-px-md" v-model="selected_filename" readonly label="Filename"></q-input>
       <q-input class="q-px-md" v-model="selected_path" readonly label="File Path" :input-style="{width:'20em'}"></q-input>
@@ -20,11 +20,10 @@
     </div>
     <!-- <q-separator/> -->
     <q-tab-panels v-model="active_tab" class="column col q-py-sm " animated keep-alive>
-      <q-tab-panel class="q-px-md" name="experiment_search" key="experiment_search">
+      <q-tab-panel class="column col q-px-md" name="experiment_search" key="experiment_search">
           <experiments-table />
       </q-tab-panel>
-      <q-tab-panel name="datafile_search" key="datafile_search">
-        search files
+      <q-tab-panel class="column col q-px-md" name="datafile_search" key="datafile_search">
         <datafiles-table />
       </q-tab-panel>
       <q-tab-panel class="column col q-px-md" name="rebinning_params" key="rebinning_params">
