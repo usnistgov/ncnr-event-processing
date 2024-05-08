@@ -1,17 +1,24 @@
-import { ref } from 'vue';
+import { ref, reactive } from 'vue';
 import { NumpyArray } from './numpy_array';
 import { Meta } from 'quasar';
 
 export const ncnr_metadata_api = 'https://ncnr.nist.gov/ncnrdata/metadata/api/v1';
-// export const rebinning_api = 'http://candorgpu.campus.nist.gov:8080';
-export const rebinning_api = 'http://localhost:8000';
+export const rebinning_api = 'http://candorgpu.campus.nist.gov:9876';
+// export const rebinning_api = 'http://localhost:8000';
 
 type tab_names = 'experiment_search' | 'datafile_search' | 'rebinning_params';
 export const active_tab = ref<tab_names>('experiment_search');
 export const selected_experiment = ref('');
 export const selected_filename = ref('');
 export const selected_path = ref('');
-export const duration = ref(1);
+export const rebin_limits = reactive({
+    type: 'xslice',
+    color1: 'blue',
+    color2: 'green',
+    show_lines: true,
+    x1: 0,
+    x2: 1
+});
 export const datafile_search_state = ref({
     'rows': [],
     'pagination': {
@@ -198,6 +205,8 @@ export async function get_metadata() {
 
     metadata.value = metadata_reply;
     metadata_request.value = request;
+    rebin_limits.x1 = 0;
+    rebin_limits.x2 = metadata_reply.duration;
     // console.log(metadata_reply);
   }
 }
