@@ -31,7 +31,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { api_get, ncnr_metadata_api, selected_experiment, selected_filename, selected_path, get_metadata, active_tab } from 'src/store';
 
 const endpoint = 'datafiles';
@@ -72,14 +72,14 @@ interface APISearchParams {
   full_count?: boolean
 }
 
-type Row = {filename: string, rxcycle_id: string, start_date: string, metadata?: string};
+type Row = {filename: string, rxcycle_id: string, start_date: string, localdir: string, metadata?: string};
 const rows = ref<Row[]>([]);
-const selected = ref([]);
+const selected = ref<Row[]>([]);
 const pagination = ref({
   'rowsPerPage': 10,
   'descending': true,
   'sortBy': 'date',
-  'page': 0,
+  'page': 1,
   'rowsNumber': 0,
 })
 
@@ -87,25 +87,23 @@ const search_inputs = ref({
   filename: '',
 });
 
-async function on_selection() {
-  const r = rows.value;
-  if (r.length > 0) {
-    console.log(r[0]);
-    const { filename, localdir } = r[0];
+async function on_selection(ev: { added: boolean, rows: Row[] }) {
+  const { added, rows } = ev;
+  if (added) {
+    const { filename, localdir } = rows[0];
     selected_filename.value = filename;
     selected_path.value = localdir;
-
     await get_metadata();
     active_tab.value = 'rebinning_params';
   }
   else {
-    selected_filename.value = selected_path.value = ''
+    selected_filename.value = selected_path.value = '';
   }
 }
 
 function row_dblclick(_evt: unknown, row: Row) {
   selected.value.splice(0, 1, row);
-  on_selection();
+  on_selection({ added: true, rows: [row]});
 }
 
 async function search(update_total = true) {
@@ -124,7 +122,7 @@ async function search(update_total = true) {
     if (full_count_result.length > 0) {
       const rowsNumber = full_count_result[0]?.full_count ?? 0;
       pagination.value['rowsNumber'] = rowsNumber;
-      pagination.value['page'] = 0;
+      pagination.value['page'] = 1;
     }
   }
 
@@ -137,6 +135,12 @@ async function pagination_request_handler(request: {pagination: { rowsPerPage: n
   pagination.value.page = request.pagination.page;
   await search(false);
 }
+
+watch(
+  () => selected_experiment.value,
+  () => { search() },
+  { immediate: true }
+);
 
 </script>
 
