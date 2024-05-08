@@ -328,6 +328,9 @@ def _bin_by_time_old_vsans(entry, bins):
         eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
         eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
         print("loading", detector)
+        if not Path(eventpath).exists():
+            print("missing", eventpath)
+            continue
         events = rebin_vsans_old.VSANSEvents(eventpath)
         # TODO: correct for time of flight
         # TODO: elide events in mask
