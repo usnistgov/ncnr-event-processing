@@ -26,19 +26,17 @@
       />
       <q-input
         class="q-mx-md"
-        v-model.number="start"
+        v-model.number="rebin_limits.x1"
         type="number"
         label="Start"
-        :disable="use_num"
       />
       <q-input
         class="q-mx-md"
-        v-model.number="end"
+        v-model.number="rebin_limits.x2"
         type="number"
         label="End"
-        :disable="use_num"
       />
-      <q-btn label="Reset start + end" color="primary"></q-btn>
+      <q-btn label="Reset start + end" color="primary" @click="reset_start_end"></q-btn>
     </div>
     <div class="row justify-center">
       <q-btn :disabled="fetching_summary" v-if="selected_filename && selected_path" style="height: 1em;" color="positive" @click="update_summary">
@@ -76,12 +74,11 @@
 <script setup lang="ts">
 import { ref, onMounted, shallowRef, watchEffect, toRaw } from 'vue';
 import { react } from 'plotly.js-dist';
-import { api_get, api_post, rebinning_api, metadata, metadata_request, selected_filename, selected_path } from 'src/store';
+import { xSliceInteractor } from 'plotly-interactors';
+import { api_get, api_post, rebinning_api, metadata, metadata_request, selected_filename, selected_path, rebin_limits } from 'src/store';
 import { NumpyArray, NestedArray } from 'src/numpy_array';
 import type { TimeBins, SummaryTimeRequest, MetadataRequest } from 'src/store';
 import { v4 as uuidv4 } from 'uuid';
-import { store } from 'quasar/wrappers';
-import { isCallOrNewExpression } from 'typescript';
 
 const download_button = ref<HTMLFormElement>();
 const download_request_input = ref<HTMLInputElement>();
@@ -89,6 +86,7 @@ const download_id_input = ref<HTMLInputElement>();
 const num_bins = ref(100);
 const bin_width = ref(10);
 const use_num = ref(true);
+const x_slice_interactor = ref<xSliceInteractor>();
 
 const fetching_summary = ref(false);
 const downloading = ref(false);
@@ -101,8 +99,6 @@ function set_num_bins(value_str: string) {
   }
 }
 
-const start = ref(0);
-const end = ref(3600);
 const stored_bins = shallowRef<TimeBins>();
 
 const summary_plot_div = ref<HTMLDivElement>();
@@ -185,7 +181,7 @@ function get_edges(duration: number, nominal_start: number | null, nominal_end: 
 }
 
 function get_summary_time_bins_object() {
-  const offset_start = start.value % bin_width.value;
+  const offset_start = rebin_limits.x1 % bin_width.value;
   const edges = get_edges(metadata.value.duration, offset_start, metadata.value.duration, bin_width.value, num_bins.value, use_num.value);
   const result: TimeBins = {
     mode: 'time',
@@ -197,7 +193,7 @@ function get_summary_time_bins_object() {
 }
 
 function get_rebin_time_bins_object() {
-  const edges = get_edges(metadata.value.duration, start.value, end.value, bin_width.value, num_bins.value, use_num.value);
+  const edges = get_edges(metadata.value.duration, rebin_limits.x1, rebin_limits.x2, bin_width.value, num_bins.value, use_num.value);
   const result: TimeBins = {
     mode: 'time',
     mask: null,
@@ -318,14 +314,23 @@ function handle_summary_click(ev) {
   }
 }
 
+async function reset_start_end() {
+  rebin_limits.x1 = 0;
+  rebin_limits.x2 = metadata.value.duration;
+}
+
 watchEffect(() => {
-  const [_start, _end] = get_start_end(metadata.value.duration, start.value, end.value);
+  const [_start, _end] = get_start_end(metadata.value.duration, rebin_limits.x1, rebin_limits.x2);
 
   if (use_num.value && num_bins.value != null && num_bins.value > 0) {
     bin_width.value = ( _end - _start ) / ( num_bins.value );
   }
   else if (bin_width.value != null && bin_width.value > 0) {
     num_bins.value = Math.ceil( ( _end - _start ) / bin_width.value );
+  }
+
+  if (x_slice_interactor.value?.update) {
+    x_slice_interactor.value.update();
   }
 
 });
@@ -337,6 +342,7 @@ onMounted(() => {
     splot.on('plotly_click', handle_summary_click);
     splot.on('plotly_hover', handle_summary_click);
   });
+  x_slice_interactor.value = new xSliceInteractor(rebin_limits, summary_plot_div.value, 'xy');
   react(frame_plot_div.value, frame_fig.data, frame_fig.layout, frame_fig.config);
 })
 
