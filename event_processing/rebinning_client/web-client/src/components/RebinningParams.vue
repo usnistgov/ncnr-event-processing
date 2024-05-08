@@ -63,7 +63,7 @@
       <iframe name="hiddenFrame" width="0" height="0" border="0" style="display:none;"></iframe>
     </div>
     <div class="col column">
-      <div class="col row">
+      <div class="col row" v-show="shown_summary == selected_filename">
         <div class="plotly col" ref="summary_plot_div" style=""></div>
         <div class="plotly col" ref="frame_plot_div"></div>
       </div>
@@ -88,6 +88,7 @@ const bin_width = ref(10);
 const use_num = ref(true);
 const x_slice_interactor = ref<xSliceInteractor>();
 
+const shown_summary = ref('');
 const fetching_summary = ref(false);
 const downloading = ref(false);
 
@@ -254,6 +255,7 @@ async function update_summary() {
 
   const summary = await api_post(rebinning_api, 'summary_time', request_object);
   fetching_summary.value = false;
+  shown_summary.value = selected_filename.value;
 
   const time_bin_edges = summary.bins.edges;
   const x = new NumpyArray(time_bin_edges).to_array();
