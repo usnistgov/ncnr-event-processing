@@ -3,10 +3,18 @@
 
       <div class="row col">
         <div class="col-auto">
+          <div class="text-h6 q-py-sm">Search:</div>
           <q-input
             v-model="search_inputs.filename"
             debounce="500"
-            label="Filename Search"
+            label="Filename"
+            clearable
+            @update:model-value="search"
+          ></q-input>
+          <q-input
+            v-model="search_inputs.description"
+            debounce="500"
+            label="Description (% wild)"
             clearable
             @update:model-value="search"
           ></q-input>
@@ -69,7 +77,8 @@ interface APISearchParams {
   limit: number,
   experiment_id: string,
   filename?: string,
-  full_count?: boolean
+  full_count?: boolean,
+  metadata?: string,
 }
 
 type Row = {filename: string, rxcycle_id: string, start_date: string, localdir: string, metadata?: string};
@@ -85,6 +94,7 @@ const pagination = ref({
 
 const search_inputs = ref({
   filename: '',
+  description: ''
 });
 
 async function on_selection(ev: { added: boolean, rows: Row[] }) {
@@ -115,6 +125,10 @@ async function search(update_total = true) {
   const { filename } = search_inputs.value;
   if (filename) {
     params['filename'] = `%${filename}%`;
+  }
+  const { description } = search_inputs.value;
+  if (description) {
+    params['metadata'] = JSON.stringify([{property_path: ['description'], comparison: 'like', value: `${description}` }]);
   }
   if (update_total) {
     const full_count_params: APISearchParams = {'full_count': true, ...params};

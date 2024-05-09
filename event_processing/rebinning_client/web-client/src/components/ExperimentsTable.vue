@@ -16,6 +16,13 @@
           clearable
           @update:model-value="search"
         ></q-input>
+        <q-input
+          v-model="search_inputs.experiment_title"
+          debounce="500"
+          label="Title"
+          clearable
+          @update:model-value="search"
+        ></q-input>
       </div>
       <div class="col">
         <q-table
@@ -126,7 +133,7 @@ async function search(update_total = true) {
     if (full_count_result.length > 0) {
       const rowsNumber = full_count_result[0]?.full_count ?? 0;
       pagination.value['rowsNumber'] = rowsNumber;
-      pagination.value['page'] = 0;
+      pagination.value['page'] = 1;
     }
   }
 
