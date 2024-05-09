@@ -72,12 +72,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, shallowRef, watchEffect, toRaw } from 'vue';
+import { ref, onMounted, shallowRef, watchEffect } from 'vue';
 import { react } from 'plotly.js-dist';
 import { xSliceInteractor } from 'plotly-interactors';
 import { api_get, api_post, rebinning_api, metadata, metadata_request, selected_filename, selected_path, rebin_limits } from 'src/store';
 import { NumpyArray, NestedArray } from 'src/numpy_array';
-import type { TimeBins, SummaryTimeRequest, MetadataRequest } from 'src/store';
+import type { TimeBins, SummaryTimeRequest } from 'src/store';
 import { v4 as uuidv4 } from 'uuid';
 
 const download_button = ref<HTMLFormElement>();
@@ -91,14 +91,6 @@ const x_slice_interactor = ref<xSliceInteractor>();
 const shown_summary = ref('');
 const fetching_summary = ref(false);
 const downloading = ref(false);
-
-function set_num_bins(value_str: string) {
-  const new_value = parseFloat(value_str);
-  if (!isNaN(new_value)) {
-    console.log({new_value})
-    num_bins.value = new_value;
-  }
-}
 
 const stored_bins = shallowRef<TimeBins>();
 
@@ -293,8 +285,6 @@ async function show_frame(det_name: string, point_number: number) {
   const frame_reply = await api_post(rebinning_api, `timebin/frame/${point_number}`, request_object);
   const frame_data = new NumpyArray(frame_reply.data[det_name]);
 
-  const x = linspace(0.5, frame_data.shape[0] + 0.5, frame_data.shape[0]);
-  const y = linspace(0.5, frame_data.shape[1] + 0.5, frame_data.shape[1]);
   frame_data.shape.splice(2, 1);
   const trace = { z: frame_data.to_array(), type: 'heatmap' }
 
