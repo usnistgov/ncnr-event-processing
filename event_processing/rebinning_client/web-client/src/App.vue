@@ -2,7 +2,7 @@
   <q-layout view="lHh Lpr lFf" class="column no-wrap">
     <q-header elevated class="row">
       <q-toolbar>
-        <q-img fit="scale-down" src="/src/assets/chrns-3-smaller.png" style="width: 16em;"></q-img>
+        <q-img fit="scale-down" src="./assets/chrns-3-smaller.png" style="width: 16em;"></q-img>
         <q-toolbar-title class="text-h4">CHRNS event rebinning</q-toolbar-title>
 
         <!-- <q-btn flat round dense icon="whatshot" /> -->
