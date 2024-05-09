@@ -1,6 +1,5 @@
 import { ref, reactive } from 'vue';
 import { NumpyArray } from './numpy_array';
-import { Meta } from 'quasar';
 
 export const ncnr_metadata_api = 'https://ncnr.nist.gov/ncnrdata/metadata/api/v1';
 export const rebinning_api = 'http://candorgpu.campus.nist.gov:9876';
