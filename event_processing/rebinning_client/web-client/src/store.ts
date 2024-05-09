@@ -2,8 +2,8 @@ import { ref, reactive } from 'vue';
 import { NumpyArray } from './numpy_array';
 
 export const ncnr_metadata_api = 'https://ncnr.nist.gov/ncnrdata/metadata/api/v1';
-export const rebinning_api = 'http://candorgpu.campus.nist.gov:9876';
-// export const rebinning_api = 'http://localhost:8000';
+// define the API URL for the rebinning service in quasar.config.js build.env.API_URL
+export const rebinning_api = process.env.API_URL ?? 'http://localhost:8000';
 
 type tab_names = 'experiment_search' | 'datafile_search' | 'rebinning_params';
 export const active_tab = ref<tab_names>('experiment_search');
