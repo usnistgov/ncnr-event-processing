@@ -373,7 +373,7 @@ def _cleanup_vsans(entry, raw_events):
     wavelength_spread = entry["instrument/beam/monochromator/wavelength_spread"][0]
     print(f"{wavelength=} {wavelength_spread=}")
     detectors = list("FR FT FB FL MB MR ML MT R".split())
-
+    result = {}
     events = {}
     if make_table:
         print(f"    # Table data extracted from {datapath}")
@@ -420,6 +420,11 @@ def _cleanup_vsans(entry, raw_events):
         #print(f"times: {times.min()/1e9:.3f}:{times.max()/1e9:.3f} relative to {int(start//1e9)}")
         # TODO: correct times for time of flight from wavelength and distance
         events[f"detector_{name}"] = dict(dims=dims, ts=times, x=x, y=y)
+    # Treat the monitor as a detector named "monitor" so that we don't need
+    # special handling during rebinning.
+    monitors = raw_events._fields.get("monitors", [])
+    if monitors:
+        events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
     return dict(detectors=events)
 
 def process_trigger(message, db):

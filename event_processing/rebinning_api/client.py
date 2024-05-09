@@ -113,7 +113,7 @@ def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
     if stop is None:
         stop = metadata.sweep.stop
     edges = np.linspace(start, stop, nbins+1)
-    bins = models.SweepBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
+    bins = models.DeviceBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
     return bins
 
 def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=None, mask=None, point=0,

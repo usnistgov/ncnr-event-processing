@@ -71,10 +71,8 @@ class TimeBins(BaseModel):
     Masked times (e.g., during pause, or when the sample is bad) are not
     required for simple time bins (you can accomplish the same by setting
     the bin edges to gather bad data into a single point), but including it
-    makes the interface more consistent, and allows paused counts to  for a part of
-    the time bin.
-    when binning strobed measurements and strobing by value. For consistency
-    of interface they are included
+    makes the interface more consistent, and allows events to be ignored while
+    counting is paused.
     """
     #: Bin edges (time bins)
     edges: vector
@@ -94,12 +92,12 @@ class StrobeBins(BaseModel):
     #: even numbered triggers. Even/odd is preserved even through masking.
     hysterisis: bool
     #: If provided, use alternate trigger values for T0
-    trigger_override: vector | None
+    triggers: vector | None
     #: Name of the binning class
     mode: str = "strobe"
 
 class DeviceBins(BaseModel):
-    #: Device being binned (motor or environment log)
+    #: Device being binned (motor or environment control)
     device: str
     #: Bin edges in device coordinates
     edges: vector
