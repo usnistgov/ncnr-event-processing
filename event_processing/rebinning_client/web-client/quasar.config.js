@@ -65,7 +65,7 @@ module.exports = configure(function (/* ctx */) {
 
       // rebuildCache: true, // rebuilds Vite/linter/etc cache on startup
 
-      // publicPath: '/',
+      publicPath: process.env.PUBLIC_PATH ?? '/',
       // analyze: true,
       env: {
         REBINNING_API_URL: process.env.REBINNING_API_URL ?? 'http://localhost:8000/',
