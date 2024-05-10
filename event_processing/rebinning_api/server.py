@@ -192,10 +192,15 @@ def get_timebin_nexus(request: models.SummaryTimeRequest):
 
 
 ACTIVE_DOWNLOADS = set()
+PROCESSING_ERRORS = {}
 
 @app.get('/timebin/nexus_download_status/{download_id}')
 def get_download_status(download_id: str):
-    return (download_id in ACTIVE_DOWNLOADS)
+    error_state = PROCESSING_ERRORS.pop(download_id, None)
+    if error_state is not None:
+        return {"active": False, "error": error_state}
+    else:
+        return {"active": download_id in ACTIVE_DOWNLOADS}
 
 @app.post('/timebin/nexus_download')
 async def download_nexus_form(request_str: Annotated[str, Form()], download_id: Annotated[str, Form()] = ''):
@@ -206,35 +211,43 @@ async def download_nexus_form(request_str: Annotated[str, Form()], download_id: 
         ACTIVE_DOWNLOADS.add(download_id)
 
     coro = asyncio.to_thread(get_nexus, request.measurement, request.bins)
-    data = await coro
-    orig_filename = request.measurement.filename
-    orig_path = Path(orig_filename)
-    file_suffixes = ''.join(orig_path.suffixes)
-    file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
-    new_filename = f"{file_stem}_rebinned{file_suffixes}"
-    buffer_size = 2**16 # 64K
-    async def result_streamer():
-        with io.BytesIO(data) as bio:
-            buffer = bio.read(buffer_size)
-            while buffer:
-                yield buffer
+    try:
+        data = await coro
+        orig_filename = request.measurement.filename
+        orig_path = Path(orig_filename)
+        file_suffixes = ''.join(orig_path.suffixes)
+        file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
+        new_filename = f"{file_stem}_rebinned{file_suffixes}"
+        buffer_size = 2**16 # 64K
+        async def result_streamer():
+            with io.BytesIO(data) as bio:
                 buffer = bio.read(buffer_size)
-        if (download_id != ''):
-            ACTIVE_DOWNLOADS.remove(download_id)
+                while buffer:
+                    yield buffer
+                    buffer = bio.read(buffer_size)
+            if (download_id != ''):
+                ACTIVE_DOWNLOADS.discard(download_id)
 
-    last_updated_pattern = "%a, %d %b %Y %H:%M:%S GMT"
-    last_modified = datetime.datetime.strftime(datetime.datetime.now(datetime.timezone.utc), last_updated_pattern)
-    content_length = str(len(data))
-    etag = hashlib.md5(f'{last_modified}-{content_length}'.encode(), usedforsecurity=False).hexdigest()
-    headers = {
-        'Content-Disposition': f'attachment; filename="{new_filename}"',
-        'Content-Type': 'application/x-hdf5',
-        'Content-Length': content_length,
-        'Last-Modified': last_modified,
-        'ETag': etag,
-        'Access-Control-Allow-Origin': '*',
-    }
-    return StreamingResponse(result_streamer(), headers=headers)
+        last_updated_pattern = "%a, %d %b %Y %H:%M:%S GMT"
+        last_modified = datetime.datetime.strftime(datetime.datetime.now(datetime.timezone.utc), last_updated_pattern)
+        content_length = str(len(data))
+        etag = hashlib.md5(f'{last_modified}-{content_length}'.encode(), usedforsecurity=False).hexdigest()
+        headers = {
+            'Content-Disposition': f'attachment; filename="{new_filename}"',
+            'Content-Type': 'application/x-hdf5',
+            'Content-Length': content_length,
+            'Last-Modified': last_modified,
+            'ETag': etag,
+            'Access-Control-Allow-Origin': '*',
+        }
+        return StreamingResponse(result_streamer(), headers=headers)
+    except Exception as e:
+        if (download_id != ''):
+            PROCESSING_ERRORS[download_id] = str(e)
+        raise e
+    finally:
+        if (download_id != ''):
+            ACTIVE_DOWNLOADS.discard(download_id)
 
 
 def get_nexus(measurement, bins):
