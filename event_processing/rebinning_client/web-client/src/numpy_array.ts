@@ -1,6 +1,6 @@
-let get_native_littleendian = () => {
-  let uInt32 = new Uint32Array([0x11223344]);
-  let uInt8 = new Uint8Array(uInt32.buffer);
+const get_native_littleendian = () => {
+  const uInt32 = new Uint32Array([0x11223344]);
+  const uInt8 = new Uint8Array(uInt32.buffer);
 
   if(uInt8[0] === 0x44) {
       return true;
@@ -31,7 +31,7 @@ export class NumpyArray {
     if (!(constructor_key in typed_array_lookup)) {
       throw new Error(`dtype ${constructor_key} not recognized`);
     }
-    
+
     const constructor = typed_array_lookup[constructor_key];
     const bytes = base64ToBytes(this.data);
 
@@ -98,7 +98,7 @@ function parse_dtype(dtype_str: string) {
   if (match == null) {
     throw dtype_str + ' is not a recognized dtype';
   }
-  const [full, endianness, typestr, lengthstr] = match;
+  const [/*full*/, endianness, typestr, lengthstr] = match;
   return { endianness, typestr, lengthstr };
 }
 
@@ -130,18 +130,18 @@ function create_nested_array<T>(value: T[], shape: number[]): NestedArray<T> {
   return output;
 }
 
-type TypedArrayConstructor =
-  | Int8ArrayConstructor
-  | Uint8ArrayConstructor
-  | Uint8ClampedArrayConstructor
-  | Int16ArrayConstructor
-  | Uint16ArrayConstructor
-  | Int32ArrayConstructor
-  | Uint32ArrayConstructor
-  | BigInt64ArrayConstructor
-  | BigUint64ArrayConstructor
-  | Float32ArrayConstructor
-  | Float64ArrayConstructor;
+// type TypedArrayConstructor =
+//   | Int8ArrayConstructor
+//   | Uint8ArrayConstructor
+//   | Uint8ClampedArrayConstructor
+//   | Int16ArrayConstructor
+//   | Uint16ArrayConstructor
+//   | Int32ArrayConstructor
+//   | Uint32ArrayConstructor
+//   | BigInt64ArrayConstructor
+//   | BigUint64ArrayConstructor
+//   | Float32ArrayConstructor
+//   | Float64ArrayConstructor;
 
 // from MDN:
 function base64ToBytes(base64: string) {
@@ -149,7 +149,3 @@ function base64ToBytes(base64: string) {
   return Uint8Array.from(binString, (m) => m.codePointAt(0));
 }
 
-function bytesToBase64(bytes) {
-  const binString = String.fromCodePoint(...bytes);
-  return btoa(binString);
-}
