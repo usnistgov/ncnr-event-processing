@@ -55,7 +55,7 @@
           <q-spinner size="1em" color="white" v-if="downloading"></q-spinner>
         </div>
       </q-btn>
-      <form :action="`${rebinning_api}/timebin/nexus_download`" method="post" target="hiddenFrame">
+      <form :action="`${rebinning_api}timebin/nexus_download`" method="post" target="hiddenFrame">
         <input ref="download_request_input" type="text" style="display:none;" name="request_str" />
         <input ref="download_id_input" type="text" style="display:none;" name="download_id" />
         <button ref="download_button" type="submit" style="display:none;">Rebin + Download</button>
