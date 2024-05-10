@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from collections import deque
 import datetime
 import hashlib
 import io
@@ -29,7 +30,9 @@ from . import event_capture
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
 CACHE_VERSION = "0.2"
-CACHE_SIZE = int(100e9) 
+CACHE_SIZE = int(100e9)
+DOWNLOAD_HISTORY_SIZE = 10000 # number of downloads to keep track of
+
 app = FastAPI()
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
@@ -190,27 +193,22 @@ def get_timebin_nexus(request: models.SummaryTimeRequest):
     )
     return reply
 
-
-ACTIVE_DOWNLOADS = set()
+COMPLETED_DOWNLOADS = deque(maxlen=DOWNLOAD_HISTORY_SIZE)
 PROCESSING_ERRORS = {}
 
 @app.get('/timebin/nexus_download_status/{download_id}')
 def get_download_status(download_id: str):
     error_state = PROCESSING_ERRORS.pop(download_id, None)
     if error_state is not None:
-        ACTIVE_DOWNLOADS.discard(download_id)
-        return {"active": False, "error": error_state}
+        return { "complete": False, "error": error_state }
     else:
-        return {"active": download_id in ACTIVE_DOWNLOADS}
+        return { "complete": COMPLETED_DOWNLOADS.count(download_id) > 0 }
 
 @app.post('/timebin/nexus_download')
 async def download_nexus_form(request_str: Annotated[str, Form()], download_id: Annotated[str, Form()] = ''):
     """ post request coming from HTML form, that can trigger a download """
     request_dict = json.loads(request_str)
     request = models.SummaryTimeRequest(**request_dict)
-    if (download_id != ''):
-        ACTIVE_DOWNLOADS.add(download_id)
-
     coro = asyncio.to_thread(get_nexus, request.measurement, request.bins)
     try:
         data = await coro
@@ -227,7 +225,7 @@ async def download_nexus_form(request_str: Annotated[str, Form()], download_id: 
                     yield buffer
                     buffer = bio.read(buffer_size)
             if (download_id != ''):
-                ACTIVE_DOWNLOADS.discard(download_id)
+                COMPLETED_DOWNLOADS.append(download_id)
 
         last_updated_pattern = "%a, %d %b %Y %H:%M:%S GMT"
         last_modified = datetime.datetime.strftime(datetime.datetime.now(datetime.timezone.utc), last_updated_pattern)
