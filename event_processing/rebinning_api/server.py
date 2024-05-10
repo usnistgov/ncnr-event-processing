@@ -198,6 +198,7 @@ PROCESSING_ERRORS = {}
 def get_download_status(download_id: str):
     error_state = PROCESSING_ERRORS.pop(download_id, None)
     if error_state is not None:
+        ACTIVE_DOWNLOADS.discard(download_id)
         return {"active": False, "error": error_state}
     else:
         return {"active": download_id in ACTIVE_DOWNLOADS}
@@ -245,9 +246,6 @@ async def download_nexus_form(request_str: Annotated[str, Form()], download_id: 
         if (download_id != ''):
             PROCESSING_ERRORS[download_id] = str(e)
         raise e
-    finally:
-        if (download_id != ''):
-            ACTIVE_DOWNLOADS.discard(download_id)
 
 
 def get_nexus(measurement, bins):
