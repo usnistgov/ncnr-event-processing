@@ -220,13 +220,16 @@ async function download_rebinned() {
     let download_status = await api_get(rebinning_api, `timebin/nexus_download_status/${download_id}`);
     console.log('status retrieved.');
     console.log({download_status});
-    while (download_status) {
+    while (download_status?.active) {
       await sleep(200);
       console.log('sleep awaited');
       download_status = await api_get(rebinning_api, `timebin/nexus_download_status/${download_id}`);
       console.log({download_status});
     }
     downloading.value = false;
+    if (download_status?.error) {
+      alert(`Error during rebinning: ${download_status.error}`);
+    }
   }
 }
 
