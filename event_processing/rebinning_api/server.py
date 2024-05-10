@@ -1,10 +1,19 @@
+import asyncio
 import base64
+from collections import deque
+import datetime
 import hashlib
+import io
+import json
 from pathlib import Path
+import re
+from typing import Annotated
+import uuid
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Form
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
 #from dateutil.parser import isoparser
@@ -20,10 +29,26 @@ from . import binning
 
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
-CACHE_SIZE = int(100e9) 
+CACHE_VERSION = "0.2"
+CACHE_SIZE = int(100e9)
+DOWNLOAD_HISTORY_SIZE = 10000 # number of downloads to keep track of
+
 app = FastAPI()
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
+
+origins = [
+    "*",
+    "http://localhost:8080",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def start_cache():
     cache = diskcache.Cache(
@@ -151,7 +176,64 @@ def get_frame_range(measurement, bins, start, end):
 # ===================================
 @app.post("/timebin/nexus")
 def get_timebin_nexus(request: models.SummaryTimeRequest):
-    return get_nexus(request.measurement, request.bins)
+    data = get_nexus(request.measurement, request.bins)
+    reply = models.NexusReply(
+        base64_data=base64.b64encode(data),
+    )
+    return reply
+
+COMPLETED_DOWNLOADS = deque(maxlen=DOWNLOAD_HISTORY_SIZE)
+PROCESSING_ERRORS = {}
+
+@app.get('/timebin/nexus_download_status/{download_id}')
+def get_download_status(download_id: str):
+    error_state = PROCESSING_ERRORS.pop(download_id, None)
+    if error_state is not None:
+        return { "complete": False, "error": error_state }
+    else:
+        return { "complete": COMPLETED_DOWNLOADS.count(download_id) > 0 }
+
+@app.post('/timebin/nexus_download')
+async def download_nexus_form(request_str: Annotated[str, Form()], download_id: Annotated[str, Form()] = ''):
+    """ post request coming from HTML form, that can trigger a download """
+    request_dict = json.loads(request_str)
+    request = models.SummaryTimeRequest(**request_dict)
+    coro = asyncio.to_thread(get_nexus, request.measurement, request.bins)
+    try:
+        data = await coro
+        orig_filename = request.measurement.filename
+        orig_path = Path(orig_filename)
+        file_suffixes = ''.join(orig_path.suffixes)
+        file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
+        new_filename = f"{file_stem}_rebinned{file_suffixes}"
+        buffer_size = 2**16 # 64K
+        async def result_streamer():
+            with io.BytesIO(data) as bio:
+                buffer = bio.read(buffer_size)
+                while buffer:
+                    yield buffer
+                    buffer = bio.read(buffer_size)
+            if (download_id != ''):
+                COMPLETED_DOWNLOADS.append(download_id)
+
+        last_updated_pattern = "%a, %d %b %Y %H:%M:%S GMT"
+        last_modified = datetime.datetime.strftime(datetime.datetime.now(datetime.timezone.utc), last_updated_pattern)
+        content_length = str(len(data))
+        etag = hashlib.md5(f'{last_modified}-{content_length}'.encode(), usedforsecurity=False).hexdigest()
+        headers = {
+            'Content-Disposition': f'attachment; filename="{new_filename}"',
+            'Content-Type': 'application/x-hdf5',
+            'Content-Length': content_length,
+            'Last-Modified': last_modified,
+            'ETag': etag,
+            'Access-Control-Allow-Origin': '*',
+        }
+        return StreamingResponse(result_streamer(), headers=headers)
+    except Exception as e:
+        if (download_id != ''):
+            PROCESSING_ERRORS[download_id] = str(e)
+        raise e
+
 
 def get_nexus(measurement, bins):
     """
@@ -170,10 +252,7 @@ def get_nexus(measurement, bins):
         data = nexus_util.nexus_dup(entry, binned, bins)
     finally:
         entry.file.close()
-    reply = models.NexusReply(
-        base64_data=base64.b64encode(data),
-    )
-    return reply
+    return data
 
 
 def bin_events(measurement, bins, summary=False):
@@ -245,6 +324,9 @@ def _bin_by_time_old_vsans(entry, bins):
         eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
         eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
         print("loading", detector)
+        if not Path(eventpath).exists():
+            print("missing", eventpath)
+            continue
         events = rebin_vsans_old.VSANSEvents(eventpath)
         # TODO: correct for time of flight
         # TODO: elide events in mask
