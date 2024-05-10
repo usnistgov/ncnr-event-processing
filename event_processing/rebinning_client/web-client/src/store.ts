@@ -1,9 +1,9 @@
 import { ref, reactive } from 'vue';
 import { NumpyArray } from './numpy_array';
 
-export const ncnr_metadata_api = 'https://ncnr.nist.gov/ncnrdata/metadata/api/v1';
+export const ncnr_metadata_api = process.env.METADATA_API_URL ?? 'https://ncnr.nist.gov/ncnrdata/metadata/api/v1/';
 // define the API URL for the rebinning service in quasar.config.js build.env.API_URL
-export const rebinning_api = process.env.API_URL ?? 'http://localhost:8000';
+export const rebinning_api = process.env.REBINNING_API_URL ?? 'http://localhost:8000/';
 
 type tab_names = 'experiment_search' | 'datafile_search' | 'rebinning_params';
 export const active_tab = ref<tab_names>('experiment_search');
@@ -42,7 +42,8 @@ export const binning_state = ref({
 });
 
 export async function api_post(base_api: string, endpoint: string, data: object) {
-    const response = await fetch(`${base_api}/${endpoint}`, {
+    const url = new URL(endpoint, base_api);
+    const response = await fetch(url, {
         method: 'POST', // *GET, POST, PUT, DELETE, etc.
         mode: 'cors', // no-cors, *cors, same-origin
         cache: 'no-cache', // *default, no-cache, reload, force-cache, only-if-cached
@@ -65,7 +66,7 @@ export async function api_post(base_api: string, endpoint: string, data: object)
 }
 
 export async function api_get(base_api: string, endpoint: string, data: object = {}) {
-    const url = new URL(`${base_api}/${endpoint}`);
+    const url = new URL(endpoint, base_api);
     url.search = new URLSearchParams(data).toString();
     const response = await fetch(url);
     return response.json();
