@@ -32,6 +32,7 @@
           :columns="columns"
           row-key="id"
           selection="single"
+          wrap-cells
           v-model:selected="selected"
           @selection="on_selection"
           @row-dblclick="row_dblclick"
@@ -49,8 +50,8 @@ import { api_get, ncnr_metadata_api, all_instruments, selected_experiment, activ
 
 const endpoint = 'experiments';
 const columns = [
-    {'name': 'experiment_id', 'label': 'Experiment ID', 'field': 'id', 'required': true, 'align': 'left', 'style': 'width: 8em;'},
-    {'name': 'title', 'label': 'Title', 'field': 'title', 'align': 'left', 'style': 'min-width:2px;'},
+    {'name': 'experiment_id', 'label': 'Experiment ID', 'field': 'id', 'required': true, 'align': 'left', 'headerStyle': {'width': '10em'}},
+    {'name': 'title', 'label': 'Title', 'field': 'title', 'align': 'left'},
     {'name': 'participants', 'label': 'Participants', 'field': 'participant_names', 'align': 'left', 'format': (value: string) => JSON.parse(value).join(', '), 'style': 'min-width:2px;'},
 ]
 
@@ -198,6 +199,7 @@ async function pagination_request_handler(request: {pagination: { rowsPerPage: n
   td:first-child
     position: sticky
     left: 0
+    width: 5.5em
     z-index: 1
 
   th:nth-child(2),
