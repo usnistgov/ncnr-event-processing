@@ -6,3 +6,6 @@ numpy
 #pydantic
 #pydantic_numpy # deprecated but still required
 requests
+pylru
+torch
+#numba

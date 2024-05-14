@@ -81,7 +81,7 @@ class VSANSEvents(object):
         self.read_data()
  
     def _repeat(self, n):
-        # Clone data so we can do speed tests on the histograms
+        # Clone data so we can do speed tests on large event streams
         self.tubeID = np.tile(self.tubeID, n)
         self.pixel = np.tile(self.pixel, n)
         self.ts = np.tile(self.ts, n)
@@ -216,6 +216,10 @@ class VSANSEvents(object):
         return detectors, edges * TIMESTAMP_RESOLUTION
 
     def rebin_numba(self, time_slices=10):
+        try:
+            import numba
+        except ImportError:
+            raise NotImplementedError("Needs numba")
         if hasattr(time_slices, 'size'):
             # then it's an array, treat as bin edges in seconds:
             edges = time_slices / TIMESTAMP_RESOLUTION
@@ -267,8 +271,13 @@ class VSANSEvents(object):
 # contention even though multiple processors may be reading data in the overlap
 # region. There will be no write contention because every process is working
 # in its own time slices.
-import numba
-@numba.njit('int32[:,:,:](uint64[:], uint8[:], uint8[:], uint64[:], int64[:])', cache=True)
+# TODO: numba binning not used at the moment, so don't require numba package
+try:
+    from numba import njit
+except ImportError:
+    def njit(*args, **kw):
+        return lambda x: x
+@njit('int32[:,:,:](uint64[:], uint8[:], uint8[:], uint64[:], int64[:])', cache=True)
 def numba_binning(edges, tubeID, pixelID, times, index):
     bins = np.zeros((edges.size-1, 192, 128), dtype='int32')
 
@@ -306,7 +315,7 @@ def force_compile():
     times = np.zeros(0, dtype='uint64')
     index = np.zeros(0, dtype='int64')
     numba_binning(edges, tubeID, pixel, times, index)
-force_compile()
+#force_compile()
 
 def demo():
     from matplotlib import pyplot as plt
