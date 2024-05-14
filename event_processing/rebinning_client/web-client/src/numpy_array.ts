@@ -53,8 +53,11 @@ export class NumpyArray {
   }
 
   to_array() {
-    const num_array = [...this.to_typed_array()].map(Number);
-    return create_nested_array(num_array, this.shape)
+    return create_nested_array(this.to_number_array(), this.shape)
+  }
+
+  to_number_array() {
+    return [...this.to_typed_array()].map(Number);
   }
 
   static from_array(array_in: number[]) {
@@ -116,7 +119,7 @@ function create_nested_array<T>(value: T[], shape: number[]): NestedArray<T> {
 
   // Get reshaped output:
   let output: NestedArray<T> = value;
-  const subdims = shape.slice(1).reverse();
+  const subdims = shape.slice(1).toReversed();
   for (const dim of subdims) {
     // in each pass, replace input with array of slices of input
     const new_output = [];
