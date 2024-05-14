@@ -16,6 +16,9 @@ TIMESTAMP_RESOLUTION = 100e-9
 EVENTS_FOLDER = "cache/event_files"
 EVENTS_ENDPOINT = "http://nicedata.ncnr.nist.gov/eventfiles"
 
+NUM_TUBE = 192
+NUM_PIXEL = 128
+
 def eventfiles_from_nexus(nexus): #, events_folder=EVENTS_FOLDER):
     intrument = "vsans"
     files = set()
@@ -120,18 +123,17 @@ class VSANSEvents(object):
         # include two extra bins for the timestamps that fall outside the defined bins
         # (those with indices 0 and n_bins + 1); for an array of size n+1 searchsorted
         # returns insertion indices from 0 (below the left edge) to n+1 (past the right edge)
-        time_sliced_output = np.zeros((192, 128, n_bins + 2))
+        binned = np.zeros((n_bins + 2, NUM_TUBE, NUM_PIXEL))
         # the operation below can be repeated... streaming histograms!
-        np.add.at(time_sliced_output, (self.tubeID, self.pixel, time_bins), 1)
+        np.add.at(binned, (time_bins, self.tubeID, self.pixel), 1)
         # throw away the data in the outside bins
-        time_sliced_output = time_sliced_output[:,:,1:-1]
-
+        binned = binned[1:-1, :, :]
 
         detectors = {
-            "right": np.fliplr(time_sliced_output[0:48]),
-            "left": np.flipud(time_sliced_output[144:192]),
-            "top": (time_sliced_output[48:96]).swapaxes(0,1),
-            "bottom": np.flipud(np.fliplr((time_sliced_output[96:144]).swapaxes(0,1)))
+            "right": binned[:, 0:48, :].reshape((n_bins, NUM_PIXEL, 48)),
+            "left": binned[:, 144:192, :].reshape((n_bins, NUM_PIXEL, 48)),
+            "top": binned[:, 48:96, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
+            "bottom": binned[:, 96:144, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
         }
 
         # returns: detectors data, and bin edges in seconds
@@ -148,9 +150,9 @@ class VSANSEvents(object):
             time_slices = np.histogram_bin_edges(self.ts, bins=time_slices)
 
         bins = (
-            torch.arange(193, dtype=torch.float64), 
-            torch.arange(129, dtype=torch.float64),
             torch.from_numpy(time_slices.astype('float64')),
+            torch.arange(NUM_TUBE+1, dtype=torch.float64),
+            torch.arange(NUM_PIXEL+1, dtype=torch.float64),
         )
         ts = torch.from_numpy(self.ts.view(dtype=np.int64)).to(torch.float64)
         tubeID = torch.from_numpy(self.tubeID).to(torch.float64)
@@ -161,10 +163,10 @@ class VSANSEvents(object):
         binned = binned.numpy()
 
         detectors = {
-            "right": np.fliplr(binned[0:48]),
-            "left": np.flipud(binned[144:192]),
-            "top": (binned[48:96]).swapaxes(0,1),
-            "bottom": np.flipud(np.fliplr((binned[96:144]).swapaxes(0,1)))
+            "right": binned[:, 0:48, :].reshape((n_bins, NUM_PIXEL, 48)),
+            "left": binned[:, 144:192, :].reshape((n_bins, NUM_PIXEL, 48)),
+            "top": binned[:, 48:96, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
+            "bottom": binned[:, 96:144, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
         }
 
         # returns: detectors data, and bin edges in seconds
@@ -193,23 +195,30 @@ class VSANSEvents(object):
         ts_edges = pad(edges, (1, 0), "constant", -2**63)
         ts = torch.from_numpy(self.ts.view(dtype=np.int64)).to(device=device)
         time_index = torch.searchsorted(ts_edges, ts, side='right').to(dtype=torch.int32, device=device)
-        tubeID = torch.from_numpy(self.tubeID).to(dtype=torch.int32, device=device)
-        pixel = torch.from_numpy(self.pixel).to(dtype=torch.int32, device=device)
-        bin_index = (tubeID*128 + pixel)*(n_bins+2) + time_index - 1
+        tubeID = torch.from_numpy(self.tubeID).to(device=device)
+        pixel = torch.from_numpy(self.pixel).to(device=device)
+        # Warning: tubeID:uint8 * scalar => uint8 so can't do tubeID*NUM_PIXEL.
+        # However we can do (time_index:int32 + tubeID:uint8)*scalar => int32.
+        # Go with the faster, lower memory form, with the understanding that
+        # it'll be very confusing for the next person who changes this
+        bin_index = ((time_index - 1)*NUM_TUBE + tubeID)*NUM_PIXEL + pixel # !!!! uint8 to int32 type promotion can be surprising !!!!
         source = torch.ones_like(bin_index)
-        binned = torch.zeros(192 * 128 * (n_bins + 2), dtype=torch.int32, device=device)
+        binned = torch.zeros((n_bins + 2)*NUM_TUBE*NUM_PIXEL, dtype=torch.int32, device=device)
         #print("rebin_torch_index_add", time_index.dtype, tubeID.dtype, pixel.dtype, source.dtype, source.shape, bin_index.dtype, bin_index.shape)
         binned.index_add_(0, bin_index, source)
-        binned = binned.reshape((192, 128, (n_bins+2)))
+        binned = binned.reshape((n_bins+2, NUM_TUBE, NUM_PIXEL))
+        #print(f"events={len(ts)} binned={binned.sum()} trimmed={binned[1:-1].sum()}")
 
+        #print(f"R:{binned[1:-1, 0:48].sum()} T:{binned[1:-1, 48:96].sum()}  B:{binned[1:-1, 96:144].sum()}  L:{binned[1:-1, 144:192].sum()}")
         # throw away the data in the outside bins
-        binned = binned[:,:,1:-1].cpu().numpy()
+        binned = binned[1:-1, :, :].cpu().numpy()
+        #print(f"trimmed={binned.sum()}")
 
         detectors = {
-            "right": np.fliplr(binned[0:48]),
-            "left": np.flipud(binned[144:192]),
-            "top": (binned[48:96]).swapaxes(0,1),
-            "bottom": np.flipud(np.fliplr((binned[96:144]).swapaxes(0,1)))
+            "right": binned[:, 0:48, :].reshape((n_bins, NUM_PIXEL, 48)),
+            "left": binned[:, 144:192, :].reshape((n_bins, NUM_PIXEL, 48)),
+            "top": binned[:, 48:96, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
+            "bottom": binned[:, 96:144, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
         }
 
         # returns: detectors data, and bin edges in seconds
@@ -234,13 +243,19 @@ class VSANSEvents(object):
         index = np.argsort(self.ts)
         edges = np.asarray(edges, 'uint64')
         #binned = np.zeros((edges.size-1, 192, 128), dtype='int32')
-        binned = numba_binning(edges, self.tubeID, self.pixel, self.ts, index)
+        binned = numba_binning(edges, self.ts, self.tubeID, self.pixel, index)
 
+        not_detectors = {
+            "right": np.fliplr(binned[:, 0:48, :]),
+            "left": np.flipud(binned[:, 144:192, :]),
+            "top": (binned[:, 48:96, :]).swapaxes(1, 2),
+            "bottom": np.flipud(np.fliplr((binned[:, 96:144, :]).swapaxes(1, 2)))
+        }
         detectors = {
-            "right": np.fliplr(binned[0:48]),
-            "left": np.flipud(binned[144:192]),
-            "top": (binned[48:96]).swapaxes(0,1),
-            "bottom": np.flipud(np.fliplr((binned[96:144]).swapaxes(0,1)))
+            "right": binned[:, 0:48, :].reshape((n_bins, NUM_PIXEL, 48)),
+            "left": binned[:, 144:192, :].reshape((n_bins, NUM_PIXEL, 48)),
+            "top": binned[:, 48:96, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
+            "bottom": binned[:, 96:144, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
         }
 
         # returns: detectors data, and bin edges in seconds
@@ -277,8 +292,8 @@ try:
 except ImportError:
     def njit(*args, **kw):
         return lambda x: x
-@njit('int32[:,:,:](uint64[:], uint8[:], uint8[:], uint64[:], int64[:])', cache=True)
-def numba_binning(edges, tubeID, pixelID, times, index):
+@njit('int32[:,:,:](uint64[:], uint64[:], uint8[:], uint8[:], int64[:])', cache=True)
+def numba_binning(edges, times, tubeID, pixelID, index):
     bins = np.zeros((edges.size-1, 192, 128), dtype='int32')
 
     # Skip leading elements outside the histogram range

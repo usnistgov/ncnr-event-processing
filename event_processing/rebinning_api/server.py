@@ -172,7 +172,7 @@ def get_timebin_frame_range(start: int, end: int, request: models.SummaryTimeReq
 def get_frame_range(measurement, bins, start, end):
     binned = bin_events(measurement, bins, summary=False)
     counts = binned['detectors']
-    data = {k: v[..., start:end] for k, v in counts.items()}
+    data = {k: v[start:end] for k, v in counts.items()}
     reply = models.FrameReply(
         data=data,
     )
@@ -315,7 +315,8 @@ def bin_events(measurement, bins, summary=False):
         binned = CACHE[binned_key]
         summed = {}
         for detector, data in binned['detectors'].items():
-            total = np.sum(np.sum(data, axis=0), axis=0)
+            # Sum the individual frames
+            total = np.reshape(data, (data.shape[0], -1)).sum(axis=1)
             #print("in summary", detector, data, total)
             summed[detector] = total
         result = dict(detectors=summed, count_time=binned['count_time'])
@@ -347,7 +348,7 @@ def _bin_by_time_old_vsans(entry, bins):
         #events._repeat(10)
         # TODO: correct for time of flight
         # TODO: elide events in mask
-        print(f"{tic()-T0:.1f}: ??binning", detector)
+        print(f"{tic()-T0:.1f}: binning", detector)
         partial_counts, _ = events.rebin(edges)
         print(f"{tic()-T0:.1f}: binned", detector)
         for xy, data in partial_counts.items():
