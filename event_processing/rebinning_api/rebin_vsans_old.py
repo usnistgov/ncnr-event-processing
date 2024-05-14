@@ -64,6 +64,7 @@ class VSANSEvents(object):
         # ('disabled', '*u1'), # * is (data_offset - size(header_dtype))
     ])
 
+    # Data in timestamp file is 8 bytes per event, with a 6 byte timestamp
     data_dtype = np.dtype([
         ('tubeID', 'u1'),
         ('pixel',  'u1'),
@@ -78,7 +79,12 @@ class VSANSEvents(object):
         num_disabled = self.data_offset - header_size # 1 byte per disabled tube.
         self.disabled_tubes = np.fromfile(self.file, count=num_disabled, offset=header_size, dtype='u1')
         self.read_data()
-        self.process_timestamps()
+ 
+    def _repeat(self, n):
+        # Clone data so we can do speed tests on the histograms
+        self.tubeID = np.tile(self.tubeID, n)
+        self.pixel = np.tile(self.pixel, n)
+        self.ts = np.tile(self.ts, n)
 
     def seek_data_start(self):
         self.file.seek(self.data_offset)
@@ -92,14 +98,16 @@ class VSANSEvents(object):
 
     def read_data(self):
         self.seek_data_start()
-        self.data = np.fromfile(self.file, dtype=self.data_dtype, count=-1)
+        data = np.fromfile(self.file, dtype=self.data_dtype, count=-1)
         self.file.close()
 
-    def process_timestamps(self):
-        ts = self.data['timestamp']
+        # convert timestamps from 6 byte LE to eight byte LE
+        ts = data['timestamp']
         self.ts = np.pad(ts, ((0,0), (0, 2)), 'constant').view(np.uint64)[:,0]
+        self.tubeID = data['tubeID']
+        self.pixel = data['pixel']
 
-    def rebin(self, time_slices=10):
+    def rebin_numpy(self, time_slices=10):
         if hasattr(time_slices, 'size'):
             # then it's an array, treat as bin edges in seconds:
             time_slices = time_slices / TIMESTAMP_RESOLUTION
@@ -114,7 +122,7 @@ class VSANSEvents(object):
         # returns insertion indices from 0 (below the left edge) to n+1 (past the right edge)
         time_sliced_output = np.zeros((192, 128, n_bins + 2))
         # the operation below can be repeated... streaming histograms!
-        np.add.at(time_sliced_output, (self.data['tubeID'], self.data['pixel'], time_bins), 1)
+        np.add.at(time_sliced_output, (self.tubeID, self.pixel, time_bins), 1)
         # throw away the data in the outside bins
         time_sliced_output = time_sliced_output[:,:,1:-1]
 
@@ -129,6 +137,117 @@ class VSANSEvents(object):
         # returns: detectors data, and bin edges in seconds
         return detectors, time_edges * TIMESTAMP_RESOLUTION
 
+    def rebin_torch_histogramdd(self, time_slices=10):
+        import torch
+
+        if hasattr(time_slices, 'size'):
+            # then it's an array, treat as bin edges in seconds:
+            time_slices = time_slices / TIMESTAMP_RESOLUTION
+        else:
+            raise NotImplementedError("time slices must be a vector")
+            time_slices = np.histogram_bin_edges(self.ts, bins=time_slices)
+
+        bins = (
+            torch.arange(193, dtype=torch.float64), 
+            torch.arange(129, dtype=torch.float64),
+            torch.from_numpy(time_slices.astype('float64')),
+        )
+        ts = torch.from_numpy(self.ts.view(dtype=np.int64)).to(torch.float64)
+        tubeID = torch.from_numpy(self.tubeID).to(torch.float64)
+        pixel = torch.from_numpy(self.pixel).to(torch.float64)
+        data = torch.stack((ts, tubeID, pixel), dim=1)
+        #print("rebin_torch", ts.shape, data.shape, data.dtype, [v.dtype for v in bins])
+        binned, edges = torch.histogramdd(data, bins=bins)
+        binned = binned.numpy()
+
+        detectors = {
+            "right": np.fliplr(binned[0:48]),
+            "left": np.flipud(binned[144:192]),
+            "top": (binned[48:96]).swapaxes(0,1),
+            "bottom": np.flipud(np.fliplr((binned[96:144]).swapaxes(0,1)))
+        }
+
+        # returns: detectors data, and bin edges in seconds
+        return detectors, time_slices * TIMESTAMP_RESOLUTION
+
+    def rebin_torch_addat(self, time_slices=10):
+        import torch
+        from torch.nn.functional import pad
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        #device = 'cpu'
+        if hasattr(time_slices, 'size'):
+            # then it's an array, treat as bin edges in seconds:
+            edges = time_slices / TIMESTAMP_RESOLUTION
+        else:
+            raise NotImplementedError("time slices must be a vector")
+            edges = np.histogram_bin_edges(self.ts, bins=time_slices)
+
+        # include two extra bins for the timestamps that fall outside the defined bins
+        # (those with indices 0 and n_bins + 1); for an array of size n+1 searchsorted
+        # returns insertion indices from 0 (below the left edge) to n+1 (past the right edge)
+        # To get the indexing to work right for values outside the range, need an
+        # extra zero for the left edge.
+        n_bins = len(edges) - 1
+        edges = torch.from_numpy(np.asarray(edges,np.int64)).to(device=device)
+        ts_edges = pad(edges, (1, 0), "constant", -2**63)
+        ts = torch.from_numpy(self.ts.view(dtype=np.int64)).to(device=device)
+        time_index = torch.searchsorted(ts_edges, ts, side='right').to(dtype=torch.int32, device=device)
+        tubeID = torch.from_numpy(self.tubeID).to(dtype=torch.int32, device=device)
+        pixel = torch.from_numpy(self.pixel).to(dtype=torch.int32, device=device)
+        bin_index = (tubeID*128 + pixel)*(n_bins+2) + time_index - 1
+        source = torch.ones_like(bin_index)
+        binned = torch.zeros(192 * 128 * (n_bins + 2), dtype=torch.int32, device=device)
+        #print("rebin_torch_index_add", time_index.dtype, tubeID.dtype, pixel.dtype, source.dtype, source.shape, bin_index.dtype, bin_index.shape)
+        binned.index_add_(0, bin_index, source)
+        binned = binned.reshape((192, 128, (n_bins+2)))
+
+        # throw away the data in the outside bins
+        binned = binned[:,:,1:-1].cpu().numpy()
+
+        detectors = {
+            "right": np.fliplr(binned[0:48]),
+            "left": np.flipud(binned[144:192]),
+            "top": (binned[48:96]).swapaxes(0,1),
+            "bottom": np.flipud(np.fliplr((binned[96:144]).swapaxes(0,1)))
+        }
+
+        # returns: detectors data, and bin edges in seconds
+        return detectors, edges * TIMESTAMP_RESOLUTION
+
+    def rebin_numba(self, time_slices=10):
+        if hasattr(time_slices, 'size'):
+            # then it's an array, treat as bin edges in seconds:
+            edges = time_slices / TIMESTAMP_RESOLUTION
+        else:
+            raise NotImplementedError("time slices must be a vector")
+            edges = np.histogram_bin_edges(self.ts, bins=time_slices)
+
+        #import torch
+        #device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        #ts = torch.from_numpy(self.ts.view(dtype=np.int64)).to(device=device)
+        #index = torch.argsort(ts).cpu()
+        index = np.argsort(self.ts)
+        edges = np.asarray(edges, 'uint64')
+        #binned = np.zeros((edges.size-1, 192, 128), dtype='int32')
+        binned = numba_binning(edges, self.tubeID, self.pixel, self.ts, index)
+
+        detectors = {
+            "right": np.fliplr(binned[0:48]),
+            "left": np.flipud(binned[144:192]),
+            "top": (binned[48:96]).swapaxes(0,1),
+            "bottom": np.flipud(np.fliplr((binned[96:144]).swapaxes(0,1)))
+        }
+
+        # returns: detectors data, and bin edges in seconds
+        return detectors, edges * TIMESTAMP_RESOLUTION
+
+
+    #rebin = rebin_torch_histogramdd
+    rebin = rebin_torch_addat
+    #rebin = rebin_numpy
+    #rebin = rebin_numba
+
     def counts_vs_time(self, start_time=0, timestep=1.0):
         """ get total counts on all detectors as a function of time,
         where the time bin size = timestep (in seconds) """
@@ -140,6 +259,54 @@ class VSANSEvents(object):
         time_axis = (bin_edges[:-1] + timestamp_step/2.0) * TIMESTAMP_RESOLUTION
         return time_axis, hist
 
+# TODO: parallel algorithm
+# After sorting (in parallel since the indices are already partially sorted?),
+# partition the indices to the various processors, then for each process skip
+# to the next edge. If still within the partition, then process until the next
+# edge after the end of its partition, otherwise exit. There should be no read
+# contention even though multiple processors may be reading data in the overlap
+# region. There will be no write contention because every process is working
+# in its own time slices.
+import numba
+@numba.njit('int32[:,:,:](uint64[:], uint8[:], uint8[:], uint64[:], int64[:])', cache=True)
+def numba_binning(edges, tubeID, pixelID, times, index):
+    bins = np.zeros((edges.size-1, 192, 128), dtype='int32')
+
+    # Skip leading elements outside the histogram range
+    next_edge = edges[0]
+    j = 0
+    while j < bins.size:
+        ev = index[j]
+        if times[ev] >= next_edge:
+            break
+        j += 1
+
+    # Build the histogram
+    i = 0
+    next_edge = edges[i+1]
+    while j < times.size:
+        ev = index[j]
+        if times[ev] >= next_edge:
+            i += 1
+            if i == edges.size - 1:
+                # Past the final edge, so we are done
+                break
+            next_edge = edges[i+1]
+        else:
+            bins[i, tubeID[ev], pixelID[ev]] += 1
+            j += 1
+
+    # Past the final edge or no more events so done
+    return bins
+
+def force_compile():
+    edges = np.arange(2, dtype='uint64')
+    tubeID = np.zeros(0, dtype='uint8')
+    pixel = np.zeros(0, dtype='uint8')
+    times = np.zeros(0, dtype='uint64')
+    index = np.zeros(0, dtype='int64')
+    numba_binning(edges, tubeID, pixel, times, index)
+force_compile()
 
 def demo():
     from matplotlib import pyplot as plt

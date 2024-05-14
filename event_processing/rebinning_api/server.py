@@ -18,7 +18,6 @@ from fastapi.responses import Response, StreamingResponse
 
 #from dateutil.parser import isoparser
 import numpy as np
-import diskcache
 
 from . import models
 from . import rebin_vsans_old
@@ -30,7 +29,8 @@ from . import binning
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
 CACHE_VERSION = "0.2"
-CACHE_SIZE = int(100e9)
+CACHE_SIZE = int(100e9) # 100 GB
+CACHE_ITEMS = 100 # max number of items, if not using items size in cache
 DOWNLOAD_HISTORY_SIZE = 10000 # number of downloads to keep track of
 
 app = FastAPI()
@@ -50,14 +50,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def start_cache():
+def disk_cache():
+    import diskcache
     cache = diskcache.Cache(
-        CACHE_PATH, 
+        CACHE_PATH,
         size_limit=CACHE_SIZE,
         eviction_policy='least-recently-used',
         )
     return cache
-CACHE = start_cache()
+def mem_cache():
+    import pylru
+    cache = pylru.lrucache(CACHE_ITEMS)
+    return cache
+CACHE = mem_cache()
 
 _ = '''
 from typing import Dict, Literal, Optional, Sequence, Tuple, Union
@@ -256,6 +261,7 @@ def get_nexus(measurement, bins):
 
 
 def bin_events(measurement, bins, summary=False):
+    from timeit import default_timer as tic; T0 = tic()
     if bins.mode != "time":
         raise NotImplementedError("only time-mode binning implemented for now")
 
@@ -276,13 +282,13 @@ def bin_events(measurement, bins, summary=False):
             else:
                 # TODO: drop raw events cache once we have event_cleanup working for everything
                 if raw_events_key not in CACHE:
-                    print(f"fetching raw events for {entry.file.filename}")
+                    print(f"{tic()-T0:.1f}: fetching raw events for {entry.file.filename}")
                     event_capture.setup()  # in case it hasn't already been setup for sim
                     raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
-                    print("caching raw events to", raw_events_key)
+                    print(f"{tic()-T0:.1f}: caching raw events to", raw_events_key)
                     CACHE[raw_events_key] = raw_events
                 if events_key not in CACHE:
-                    print("correcting")
+                    print(f"{tic()-T0:.1f}: correcting events")
                     raw_events = CACHE[raw_events_key]
                     #print(raw_events.__dict__)
                     #raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
@@ -290,17 +296,22 @@ def bin_events(measurement, bins, summary=False):
                     #print(events)
                     CACHE[events_key] = events
                 events = CACHE[events_key]
+                print(f"{tic()-T0:.1f}: binning")
                 result = binning.bin(entry, measurement.point, bins, events)
+                print(f"{tic()-T0:.1f}: binned")
                 #binned = _bin_by_time(entry, events, bins)
         finally:
             entry.file.close()
         CACHE[binned_key] = result
+        print(f"{tic()-T0:.1f}: cached")
 
     if not summary:
-        return CACHE[binned_key]
+        result = CACHE[binned_key]
+        print(f"{tic()-T0:.1f}: retrieved bins")
+        return result
 
     if summed_key not in CACHE:
-        print("accumulating events")
+        print(f"{tic()-T0:.1f}: accumulating events")
         binned = CACHE[binned_key]
         summed = {}
         for detector, data in binned['detectors'].items():
@@ -308,8 +319,12 @@ def bin_events(measurement, bins, summary=False):
             #print("in summary", detector, data, total)
             summed[detector] = total
         result = dict(detectors=summed, count_time=binned['count_time'])
+        print(f"{tic()-T0:.1f}: summed")
         CACHE[summed_key] = result
-    return CACHE[summed_key]
+        print(f"{tic()-T0:.1f}: cached summary")
+    result = CACHE[summed_key]
+    print(f"{tic()-T0:.1f}: retrieved summary")
+    return result
 
 
 # CRUFT: code for old-style histograms
@@ -319,19 +334,22 @@ def _bin_by_time_old_vsans(entry, bins):
     #mask = bins.mask # ignored in vsans rebin old
     # TODO: not binning monitor or devices
     binned = {}
+    from timeit import default_timer as tic; T0 = tic()
     for z, detector in (("front", "FL"), ("middle", "ML")):
-        print("fetching", detector)
+        print(f"{tic()-T0:.1f}: fetching", detector)
         eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
         eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
-        print("loading", detector)
         if not Path(eventpath).exists():
             print("missing", eventpath)
             continue
+        print(f"{tic()-T0:.1f}: loading", detector)
         events = rebin_vsans_old.VSANSEvents(eventpath)
+        #events._repeat(10)
         # TODO: correct for time of flight
         # TODO: elide events in mask
-        print("binning", detector)
+        print(f"{tic()-T0:.1f}: ??binning", detector)
         partial_counts, _ = events.rebin(edges)
+        print(f"{tic()-T0:.1f}: binned", detector)
         for xy, data in partial_counts.items():
             # form detector_FB, etc. from first letter of names
             name = f"detector_{z[0].upper()}{xy[0].upper()}"
@@ -355,6 +373,7 @@ def check(verbose=False):
     metadata = get_metadata(measurement)
     if verbose: print("metadata", metadata)
     bins = client.time_linbins(metadata, interval=5)
+    #print("num bins", bins.edges.size)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
     summary = get_summary_time(request)
     if verbose: print("summary", summary)

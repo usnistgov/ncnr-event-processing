@@ -195,7 +195,9 @@ def _bin_strobed(events, edges):
         # but easier to drop into numba and do it with a simple for loop. We
         # might even be able to do a parallel for over each bin, with a nested
         # for over the samples within the bin. We need to do this anyway for
-        # max/min/mean.
+        # max/min.
+        # TODO: max/min might not be sampled.
+        # Could use a cubic rather than a linear model to allow overshoot.
     result['devices'] = binned_devices
     return result
 
