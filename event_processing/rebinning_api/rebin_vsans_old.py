@@ -215,10 +215,10 @@ class VSANSEvents(object):
         #print(f"trimmed={binned.sum()}")
 
         detectors = {
-            "right": binned[:, 0:48, :].reshape((n_bins, NUM_PIXEL, 48)),
-            "left": binned[:, 144:192, :].reshape((n_bins, NUM_PIXEL, 48)),
-            "top": binned[:, 48:96, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
-            "bottom": binned[:, 96:144, :].swapaxes(1,2).reshape((n_bins, NUM_PIXEL, 48)),
+            "right": binned[:, 0:48, ::-1].copy(),
+            "left": binned[:, 192:144:-1, :].copy(),
+            "top": binned[:, 48:96, :].swapaxes(1,2).copy(),
+            "bottom": binned[:, 144:96:-1, ::-1].swapaxes(1,2).copy(),
         }
 
         # returns: detectors data, and bin edges in seconds
