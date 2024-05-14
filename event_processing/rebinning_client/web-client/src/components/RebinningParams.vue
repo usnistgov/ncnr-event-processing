@@ -17,7 +17,6 @@
           {label: 'Num.', value: true},
           {label: 'Width', value: false},
         ]"
-        @keydown.enter="update_summary"
       />
       <q-input
         class="q-mx-md"
@@ -25,6 +24,7 @@
         type="number"
         label="Bin Width"
         :disable="use_num"
+        @keydown.enter="update_summary"
       />
       <q-input
         class="q-mx-md"
