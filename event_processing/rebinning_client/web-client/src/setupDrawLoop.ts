@@ -1,9 +1,9 @@
 import { ref, onActivated, onDeactivated, shallowRef } from 'vue';
 
-export function setupDrawLoop(draw: Function, name: string = '') {
+export function setupDrawLoop<DrawArgsType>(draw: (args: DrawArgsType) => Promise<void>, name: string = '') {
   const mounted = ref(false);
   const drawing_busy = ref(false);
-  const draw_requested = shallowRef<any>(null);
+  const draw_requested = shallowRef<null | DrawArgsType>(null);
 
   const draw_if_needed = async function() {
     if (!mounted.value) {
@@ -14,7 +14,7 @@ export function setupDrawLoop(draw: Function, name: string = '') {
     }
     else if (draw_requested.value !== null) {
       drawing_busy.value = true;
-      const draw_args = draw_requested.value;
+      const draw_args = draw_requested.value as DrawArgsType;
       draw_requested.value = null;
       try {
         // Need to continue the draw loop even if draw fails
