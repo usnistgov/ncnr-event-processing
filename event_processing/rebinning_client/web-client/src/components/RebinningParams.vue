@@ -77,6 +77,7 @@ import { react } from 'plotly.js-dist';
 import { xSliceInteractor } from 'plotly-interactors';
 import { api_get, api_post, rebinning_api, metadata, metadata_request, selected_filename, selected_path, rebin_limits } from 'src/store';
 import { NumpyArray, NestedArray } from 'src/numpy_array';
+import { setupDrawLoop } from 'src/setupDrawLoop';
 import type { TimeBins, SummaryTimeRequest } from 'src/store';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -279,7 +280,7 @@ async function update_summary() {
   react(summary_plot_div.value, summary_fig.data, summary_fig.layout, summary_fig.config);
 }
 
-async function show_frame(det_name: string, point_number: number) {
+async function fetch_and_draw_frame({ det_name, point_number }: { det_name: string, point_number: number }) {
   const request_object: SummaryTimeRequest = {
     measurement: metadata_request.value,
     bins: stored_bins.value,
@@ -299,12 +300,13 @@ async function show_frame(det_name: string, point_number: number) {
 
 }
 
-function handle_summary_click(ev) {
+const draw_loop = setupDrawLoop(fetch_and_draw_frame, 'draw frame');
+
+function handle_summary_click(ev: { points: { data: { name: string }, pointNumber: number }[] }) {
   const { points } = ev;
   if (points.length > 0) {
-    const { data: { name }, pointNumber } = points[0];
-    show_frame(name, pointNumber);
-
+    const { data: { name: det_name }, pointNumber: point_number } = points[0];
+    draw_loop.draw_requested.value = {det_name, point_number};
   }
 }
 
