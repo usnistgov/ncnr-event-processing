@@ -100,7 +100,7 @@ const stored_bins = shallowRef<TimeBins>();
 const summary_plot_div = ref<HTMLDivElement>();
 const frame_plot_div = ref<HTMLDivElement>();
 
-const summary_fig = {
+const summary_fig_template = {
     'data': [],
     'layout': {
         title: 'Time Summary',
@@ -112,7 +112,7 @@ const summary_fig = {
     'config': {responsive: true},
 }
 
-const frame_fig = {
+const frame_fig_template = {
     'data': [],
     'layout': {
         title: 'Frame snapshot',
@@ -236,7 +236,7 @@ async function download_rebinned() {
 }
 
 async function update_summary() {
-  if (metadata.value == null) {
+  if (metadata.value == null || metadata_request.value == null) {
     alert('no file loaded');
     return;
   }
@@ -250,8 +250,18 @@ async function update_summary() {
     bins
   }
 
-  const summary = await api_post(rebinning_api, 'summary_time', request_object);
-  fetching_summary.value = false;
+  let summary;
+  try {
+    summary = await api_post(rebinning_api, 'summary_time', request_object);
+  }
+  catch (e) {
+    alert(`Error fetching summary: ${e}`);
+    return;
+  }
+  finally {
+    fetching_summary.value = false;
+  }
+
   shown_summary.value = selected_filename.value;
 
   const time_bin_edges = summary.bins.edges;
@@ -263,7 +273,8 @@ async function update_summary() {
     y.push(y.at(-1));
     return {x, y, name: det_name, line: {shape: 'hv'}}
   });
-  summary_fig['data'] = traces;
+  const summary_fig = structuredClone(summary_fig_template);
+  summary_fig.data = traces;
 
   const [y_min, y_max] = y_min_max;
   const y_range = (y_max - y_min);
@@ -289,13 +300,14 @@ async function fetch_and_draw_frame({ det_name, point_number }: { det_name: stri
   }
   const frame_reply = await api_post(rebinning_api, `timebin/frame/${point_number}`, request_object);
   const frame_data = new NumpyArray(frame_reply.data[det_name]);
-
-  frame_data.shape.splice(2, 1);
-  const trace = { z: frame_data.to_array(), type: 'heatmap' }
+  // remove the first dimension, which is the time dimension
+  frame_data.shape.splice(0, 1);
+  const trace = { z: frame_data.to_array(), type: 'heatmap', transpose: true }
 
   const bins_array = new NumpyArray(stored_bins.value.edges).to_array();
   const start_time = bins_array[point_number];
   const end_time = bins_array[point_number + 1]
+  const frame_fig = structuredClone(frame_fig_template);
   frame_fig.data = [trace];
   frame_fig.layout.title =  `Frame ${det_name}: ${start_time.toFixed(4)} < time < ${end_time.toFixed(4)} (s)`;
   react(frame_plot_div.value, frame_fig.data, frame_fig.layout, frame_fig.config);
@@ -336,11 +348,13 @@ watchEffect(() => {
 
 onMounted(() => {
   console.log({react});
+  const summary_fig = structuredClone(summary_fig_template);
   react(summary_plot_div.value, summary_fig.data, summary_fig.layout, summary_fig.config).then((splot) => {
     splot.on('plotly_click', handle_summary_click);
     splot.on('plotly_hover', handle_summary_click);
   });
   x_slice_interactor.value = new xSliceInteractor(rebin_limits, summary_plot_div.value, 'xy');
+  const frame_fig = structuredClone(frame_fig_template);
   react(frame_plot_div.value, frame_fig.data, frame_fig.layout, frame_fig.config);
 })
 
