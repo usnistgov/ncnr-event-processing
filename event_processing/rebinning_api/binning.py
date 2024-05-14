@@ -21,11 +21,13 @@ def bin(entry, point, bins:models.Bins, events):
 
 
     # Convert detectors from area to linear or point as necessary
-    result['detector'] = _squeeze_detectors(result['detector'])
+    result['detectors'] = _squeeze_detectors(result['detectors'])
     # Extract monitor into a separate reult
-    monitor = result['detector'].pop('monitor', None)
+    monitor = result['detectors'].pop('monitor', None)
     if monitor is not None:
         result['monitor'] = monitor
+
+    return result
 
 
 def _squeeze_detectors(detectors):
@@ -49,7 +51,9 @@ def _bin_by_time(events, edges):
     result = {}
     result['mode'] = 'time'
 
+    #print("by time", events)
     detectors = events['detectors']
+    #print("detectors", detectors)
     binned_detectors = {}
     for name, detector in detectors.items():
         dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']

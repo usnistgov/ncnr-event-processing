@@ -371,7 +371,7 @@ def _cleanup_vsans(entry, raw_events):
     start = raw_events.start
     wavelength = entry["instrument/beam/monochromator/wavelength"][0]
     wavelength_spread = entry["instrument/beam/monochromator/wavelength_spread"][0]
-    print(f"{wavelength=} {wavelength_spread=}")
+    #print(f"{wavelength=} {wavelength_spread=}")
     detectors = list("FR FT FB FL MB MR ML MT R".split())
     result = {}
     events = {}
@@ -389,8 +389,12 @@ def _cleanup_vsans(entry, raw_events):
         DAS = entry[nxdetector["data"].attrs['target']].parent
         dims = tuple(DAS['dimension'][()])
         #print(f"detector_{name}->{DAS.name} {dims=}")
-        columns = list(zip(*raw_events._fields[f"detector_{k}"]))
-        times, pixels = np.asarray(columns[0]), np.asarray(columns[1])
+        key = f"detector_{k}"
+        if key in raw_events._fields:
+            columns = list(zip(*raw_events._fields[key]))
+            times, pixels = np.asarray(columns[0]), np.asarray(columns[1])
+        else:
+            times, pixels = np.zeros(0, dtype='int64'), np.zeros(0, dtype='int64')
         y, x = pixels >> 16, pixels & 0xFFFF
         if make_table:
             num_events = len(pixels)
@@ -547,11 +551,13 @@ def cache_filename(entry, point):
 
 
 def run_fetch(files):
+    #print("fetching", files)
     with kafka_consumer() as consumer:
         for filename in files:
             fetch_events_for_file(consumer, filename)
 
 def fetch_events_for_file(consumer, filename, datapath=None):
+    print("fetching events for", filename)
     nexus = data_cache.load_nexus(filename, datapath)
     try:
         for entry_name in nexus_util.nexus_entries(nexus):
@@ -584,7 +590,9 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     instrument = lookup_instrument(entry)
     #print(f"{instrument=}")
     # TODO: use nexus filename plus point number for easier file management
+    # TODO: EventsManager is no longer caching
     path = cache_filename(entry, point)
+    #print("caching data for ", entry, point, "into", path)
     db = EventsManager(path)
     # TODO: differs from live stream, which stores events during fast shutter as well
     # Note: assumes the start/stop in nexus encloses the gating on the detector.
