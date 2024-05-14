@@ -62,9 +62,9 @@ def _bin_by_time(events, edges):
         #print(edges)
         ny, nx = dims
         index = np.searchsorted(edges, ts)
-        data = np.zeros((ny, nx, nbins+2), 'int32')
-        np.add.at(data, (y, x, index), 1)
-        binned_detectors[name] = data[:, :, 1:-1]
+        data = np.zeros((nbins+2, ny, nx), 'int32')
+        np.add.at(data, (index, y, x), 1)
+        binned_detectors[name] = data[1:-1, :, :]
         print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
     result['detectors'] = binned_detectors
     result['count_time'] = np.diff(edges)*1e-9
