@@ -7,6 +7,7 @@
         type="number"
         label="Num. Bins"
         :disable="!use_num"
+        @keydown.enter="update_summary"
       />
       <q-btn-toggle
         v-model="use_num"
@@ -16,6 +17,7 @@
           {label: 'Num.', value: true},
           {label: 'Width', value: false},
         ]"
+        @keydown.enter="update_summary"
       />
       <q-input
         class="q-mx-md"
