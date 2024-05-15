@@ -8,4 +8,5 @@ numpy
 requests
 pylru
 torch
+avroc
 #numba
