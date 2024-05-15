@@ -110,9 +110,10 @@ import json
 from urllib.request import urlopen
 
 from kafka import KafkaConsumer, TopicPartition
-import fastavro
-import avro
-import avro.io
+# import fastavro
+# import avro
+# import avro.io
+import avroc
 import numpy as np
 
 from . import nexus_util
@@ -155,11 +156,10 @@ def fetch_schema(schema_name, version=1):
 
 def avro_decoder(schema):
     from types import SimpleNamespace
-    reader = avro.io.DatumReader(avro.schema.parse(schema))  
+    reader = avroc.compile_decoder(json.loads(schema))
     def decoder(message):
         with BytesIO(message.value) as fd:
-            data = reader.read(avro.io.BinaryDecoder(fd))
-            return data
+            return reader(fd)
             #return SimpleNamespace(**data) # doesn't work for nested structures
     return decoder
 
@@ -512,8 +512,9 @@ def stream_history(consumer, topic, start, stop, partitions=None, timeout_ms=100
         consumer.seek(partition_handle, offset)
         # Single partition so messages are guaranteed to be in timestamp order
         #print("reading messages")
-        while True:
-            batches = consumer.poll(timeout_ms=200)
+        done = False
+        while not done:
+            batches = consumer.poll(timeout_ms=500)
             if not batches:
                 break
             messages = batches[partition_handle]
@@ -521,6 +522,7 @@ def stream_history(consumer, topic, start, stop, partitions=None, timeout_ms=100
             for message in messages:
                 #print("times", message.timestamp, stop)
                 if message.timestamp >= stop:
+                    done = True
                     break
                 yield message
 
