@@ -104,12 +104,15 @@ from pathlib import Path
 from io import BytesIO
 import logging
 from datetime import datetime
+from typing import Dict, Iterable, List, NamedTuple, Optional
 import uuid
 from contextlib import contextmanager
 import json
 from urllib.request import urlopen
 
 from kafka import KafkaConsumer, TopicPartition
+from kafka.consumer.fetcher import ConsumerRecord
+import kafka.structs
 # import fastavro
 # import avro
 # import avro.io
@@ -475,7 +478,13 @@ def process_message(message, db):
         processor(message, db)
 
 
-def stream_history(consumer, topic, start, stop, partitions=None, timeout_ms=100):
+class OffsetAndTimestamp(kafka.structs.OffsetAndTimestamp):
+    offset: int
+    timestamp: int
+    leader_epoch: Optional[int]
+
+
+def stream_history(consumer: KafkaConsumer, topic: str, start: int, stop: int, partitions: Optional[Iterable[int]] = None, timeout_ms: int = 100):
     if partitions is None:
         partitions = consumer.partitions_for_topic(topic)
         if partitions is None: # vsans_device doesn't exist yet...
@@ -502,7 +511,7 @@ def stream_history(consumer, topic, start, stop, partitions=None, timeout_ms=100
                 latest_time = earliest_time
             print(f"partition[{pid}] {earliest_time=} {latest_time=}")
 
-        offsets = consumer.offsets_for_times({partition_handle: start})
+        offsets: Dict[TopicPartition, OffsetAndTimestamp] = consumer.offsets_for_times({partition_handle: start})
         #print(offsets, topic, partition_handle)
         if offsets is None or offsets[partition_handle] is None:
             logging.warn(f"{topic}[{start}] offset not found")
@@ -517,7 +526,7 @@ def stream_history(consumer, topic, start, stop, partitions=None, timeout_ms=100
             batches = consumer.poll(timeout_ms=500)
             if not batches:
                 break
-            messages = batches[partition_handle]
+            messages: List[ConsumerRecord] = batches[partition_handle]
             #print("batch", len(messages), messages[0].timestamp, messages[-1].timestamp)
             for message in messages:
                 #print("times", message.timestamp, stop)
@@ -533,7 +542,7 @@ def parse_timestamp(field):
 
 INSTRUMENTS = {
     'NG3-VSANS': 'vsans',
-    'Candor': 'candor',
+    'NCNR Candor': 'candor',
     }
 def lookup_instrument(entry):
     name = entry['instrument/name'][0].decode('utf8')
@@ -561,13 +570,15 @@ def run_fetch(files):
 def fetch_events_for_file(consumer, filename, datapath=None):
     print("fetching events for", filename)
     nexus = data_cache.load_nexus(filename, datapath)
+    dbs = []
     try:
         for entry_name in nexus_util.nexus_entries(nexus):
             entry = nexus[entry_name]
             for point, start in enumerate(entry['DAS_logs/counter/eventStartTime']):
-                _fetch_events_for_point(consumer, entry, point)
+                dbs.append(_fetch_events_for_point(consumer, entry, point))
     finally:
         nexus.close()
+    return dbs
 
 def fetch_events_to_memory(entry, point, timeout_ms=100):
     with kafka_consumer() as consumer:
@@ -611,7 +622,9 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # If we can assume that the events are ordered but the message timestamps
     # are dumped in later (not the usual condition)
     topic = f"syncInfo_{instrument}"
-    start_time = stop_time = 0
+    # TODO: remove these fallbacks when kafka stream is fixed
+    start_time = arm_time * 1000 # fall back to arm time if no start_time in stream
+    stop_time = disarm_time * 1000 # fall back to disarm time if no stop_time in stream
     #search_start, search_stop = arm_time, disarm_time
     search_start, search_stop = 0, int(1e15)
     stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=timeout_ms)
