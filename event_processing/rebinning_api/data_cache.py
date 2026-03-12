@@ -5,7 +5,7 @@ import requests
 import h5py
 
 NEXUS_FOLDER = Path("cache/nexus_files").absolute()
-METADATA_ENDPOINT = "https://ncnr.nist.gov/ncnrdata/metadata/api/v1"
+METADATA_ENDPOINT = "https://charlotte.ncnr.nist.gov/ncnrdata/metadata/api/v1"
 NCNRDATA_ENDPOINT = "https://ncnr.nist.gov/pub/ncnrdata/"
 #NCNRDATA_ENDPOINT = "https://charlotte.ncnr.nist.gov/pub/ncnrdata/"
 
@@ -14,7 +14,7 @@ def search_filename(nexusfile):
     # Need cycle and experiment ID to retrieve nexus file.
     url = METADATA_ENDPOINT + "/datafiles"
     print(f"Finding location of {nexusfile} using {url}")
-    r = requests.get(url, params={"filename": nexusfile})
+    r = requests.get(url, params={"filename": nexusfile}, verify=False)
     if not r.ok:
         raise RuntimeError(f"Nexus lookup <{url}?filename={nexusfile}> failed.")
     location = r.json()[0]["localdir"]
