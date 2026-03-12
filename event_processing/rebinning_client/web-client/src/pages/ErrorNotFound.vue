@@ -1,27 +1,10 @@
 <template>
-  <div class="fullscreen bg-blue text-white text-center q-pa-md flex flex-center">
-    <div>
-      <div style="font-size: 30vh">
-        404
-      </div>
-
-      <div class="text-h2" style="opacity:.4">
-        Oops. Nothing here...
-      </div>
-
-      <q-btn
-        class="q-mt-xl"
-        color="white"
-        text-color="blue"
-        unelevated
-        to="/"
-        label="Go Home"
-        no-caps
-      />
-    </div>
+  <div class="container vh-100 d-flex flex-column align-items-center justify-content-center text-center bg-primary text-white">
+    <h1 class="display-1">404</h1>
+    <p class="h4 opacity-75">Oops. Nothing here...</p>
+    <router-link to="/" class="btn btn-light mt-4">Go Home</router-link>
   </div>
 </template>
 
 <script setup lang="ts">
-
 </script>
