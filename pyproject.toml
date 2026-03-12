@@ -17,6 +17,9 @@ dependencies = [
     "kafka-python",
     "fastavro",
     "avro",
+    "avroc",
+    "pylru",
+    "scipy"
 ]
 
 [project.optional-dependencies]
