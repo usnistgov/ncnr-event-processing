@@ -15,6 +15,8 @@ from fastapi import FastAPI, Form
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 #from dateutil.parser import isoparser
 import numpy as np
@@ -49,6 +51,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+dist_path = Path(__file__).resolve().parents[1] / "rebinning_client" / "web-client" / "dist"
+
+# Mount the directory so that any request that doesn't match an API route
+# falls back to the static files (index.html, JS, CSS, assets, …)
+app.mount("/static/", StaticFiles(directory=str(dist_path), html=True), name="frontend")
 
 def disk_cache():
     import diskcache
@@ -426,18 +434,59 @@ To run the actual server for responding to web requests use uvicorn:
  """
 
 def main():
-    import sys
-    # TODO: admit early that we need an options parser
-    if "clear" in sys.argv[1:]:
+    import argparse
+    import threading
+    import time
+    import webbrowser
+
+    parser = argparse.ArgumentParser(description="Run the rebinning API server")
+    # Sub‑command to run a predefined action (clear, check, check2, check3)
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default=None,
+        choices=["clear", "check", "check2", "check3"],
+        help="Optional command to execute before starting the server",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Do not open a browser window on start",
+    )
+    args = parser.parse_args()
+
+    # Handle the optional command first
+    if args.command == "clear":
         CACHE.clear()
-    elif "check" in sys.argv[1:]:
+        return
+    elif args.command == "check":
         check()
-    elif "check2" in sys.argv[1:]:
+        return
+    elif args.command == "check2":
         check2()
-    elif "check3" in sys.argv[1:]:
+        return
+    elif args.command == "check3":
         check3()
-    else:
-        print(usage)
+        return
+
+    # No command given → start the FastAPI server via uvicorn
+    HOST = "127.0.0.1"
+    PORT = 8000
+    def launch_server():
+        import uvicorn
+        uvicorn.run("event_processing.rebinning_api.server:app", host=HOST, port=PORT, reload=False)
+
+    server_thread = threading.Thread(target=launch_server, daemon=True)
+    server_thread.start()
+
+    # Open the browser unless --headless was requested
+    if not args.headless:
+        # Wait a moment for the server to be up
+        time.sleep(1)
+        webbrowser.open(f"http://{HOST}:{PORT}/static/")
+
+    # Keep the main thread alive while the server runs
+    server_thread.join()
 
 if __name__ == "__main__":
     main()
