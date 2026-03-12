@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Callable, Dict, Literal, TypeAlias
 
 import requests
 import numpy as np
@@ -54,6 +55,8 @@ def retrieve_events(nexus, events_folder=EVENTS_FOLDER, overwrite=False):
         paths.append(Path(events_folder) / eventfile)
     return paths
 
+REBIN_BACKEND = Literal["torch", "numpy", "numba"]
+
 class VSANSEvents(object):
     header_dtype = np.dtype([ 
         ('magic_number', 'S5'),
@@ -74,7 +77,9 @@ class VSANSEvents(object):
         ('timestamp', '6u1')
     ])
 
-    def __init__(self, filename):
+    rebin_backend: REBIN_BACKEND
+
+    def __init__(self, filename, rebin_backend: REBIN_BACKEND ="numba"):
         self.file = open(filename, 'rb')
         self.header = np.fromfile(self.file, dtype=self.header_dtype, count=1, offset=0)
         self.data_offset = self.header['data_offset'][0]
@@ -82,6 +87,7 @@ class VSANSEvents(object):
         num_disabled = self.data_offset - header_size # 1 byte per disabled tube.
         self.disabled_tubes = np.fromfile(self.file, count=num_disabled, offset=header_size, dtype='u1')
         self.read_data()
+        self.rebin_backend = rebin_backend
  
     def _repeat(self, n):
         # Clone data so we can do speed tests on large event streams
@@ -161,6 +167,7 @@ class VSANSEvents(object):
         #print("rebin_torch", ts.shape, data.shape, data.dtype, [v.dtype for v in bins])
         binned, edges = torch.histogramdd(data, bins=bins)
         binned = binned.numpy()
+        # n_bins = len(edges[0]) - 1
 
         detectors = {
             "right": binned[:, 0:48, :].reshape((n_bins, NUM_PIXEL, 48)),
@@ -225,6 +232,7 @@ class VSANSEvents(object):
         return detectors, edges * TIMESTAMP_RESOLUTION
 
     def rebin_numba(self, time_slices=10):
+        print("rebin_numba", time_slices)
         try:
             import numba
         except ImportError:
@@ -240,8 +248,10 @@ class VSANSEvents(object):
         #device = 'cuda' if torch.cuda.is_available() else 'cpu'
         #ts = torch.from_numpy(self.ts.view(dtype=np.int64)).to(device=device)
         #index = torch.argsort(ts).cpu()
+        n_bins = len(edges) - 1
         index = np.argsort(self.ts)
         edges = np.asarray(edges, 'uint64')
+
         #binned = np.zeros((edges.size-1, 192, 128), dtype='int32')
         binned = numba_binning(edges, self.ts, self.tubeID, self.pixel, index)
 
@@ -261,11 +271,26 @@ class VSANSEvents(object):
         # returns: detectors data, and bin edges in seconds
         return detectors, edges * TIMESTAMP_RESOLUTION
 
+    REBIN_FUNCTION_LOOKUP: Dict[REBIN_BACKEND, Callable] = {
+        "torch": rebin_torch_addat,
+        "numpy": rebin_numpy,
+        "numba": rebin_numba,
+    }
 
-    #rebin = rebin_torch_histogramdd
-    rebin = rebin_torch_addat
-    #rebin = rebin_numpy
-    #rebin = rebin_numba
+    def rebin(self, time_slices=10):
+        """Dispatch to the selected rebin backend.
+
+        Parameters
+        ----------
+        time_slices : int | np.ndarray
+            Same meaning as in the individual backend methods.
+        """
+        backend_func = self.REBIN_FUNCTION_LOOKUP.get(self.rebin_backend)
+        if backend_func is None:
+            raise ValueError(f"Unsupported rebin backend '{self.rebin_backend}'. Available: {list(self.REBIN_BACKENDS)}")
+        # Call the unbound function with the instance (self) as the first argument.
+        return backend_func(self, time_slices)
+
 
     def counts_vs_time(self, start_time=0, timestep=1.0):
         """ get total counts on all detectors as a function of time,
