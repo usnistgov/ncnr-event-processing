@@ -315,7 +315,7 @@ class EventsManager:
         #self._fields[val_name].write(values.data)
 
 
-def event_cleanup(entry, raw_events):
+def event_cleanup(entry, raw_events: EventsManager):
     """
     Translate the events from event manager into a form that can be fed to
     rebinning. That means converting pixels into detector index values,
@@ -349,7 +349,7 @@ VELOCITY_FACTOR = (plancks_constant*electron_volt
 def neutron_velocity(wavelength):
     return VELOCITY_FACTOR / wavelength
 
-def _cleanup_vsans(entry, raw_events):
+def _cleanup_vsans(entry, raw_events: EventsManager):
     make_table = False
     # Table data extracted from sans72110.nxs.ngv
     # det  yrange   events =? integrated
