@@ -27,13 +27,21 @@
             </tr>
           </tbody>
         </table>
+      <PaginationControls
+        :rows-per-page="pagination.rowsPerPage"
+        :page="pagination.page"
+        :rows-number="pagination.rowsNumber"
+        @updateRowsPerPage="updateRowsPerPage"
+        @goToPage="goToPage"
+      />
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, reactive, computed, watch } from 'vue';
+import PaginationControls from './PaginationControls.vue';
 import { api_get, ncnr_metadata_api, selected_experiment, selected_filename, selected_path, get_metadata, active_tab } from '@/store';
 
 const endpoint = 'datafiles';
@@ -63,7 +71,24 @@ const all_columns = computed(() => {
 type Row = { filename: string; rxcycle_id: string; start_date: string; localdir: string; metadata?: string };
 const rows = ref<Row[]>([]);
 const selected = ref<Row[]>([]);
-const pagination = ref({ rowsPerPage: 10, descending: true, sortBy: 'date', page: 1, rowsNumber: 0 });
+const pagination = reactive({ rowsPerPage: 10, descending: true, sortBy: 'date', page: 1, rowsNumber: 0 });
+// computed total pages
+const totalPages = computed(() => {
+  return pagination.rowsNumber > 0 ? Math.ceil(pagination.rowsNumber / pagination.rowsPerPage) : 1;
+});
+
+function updateRowsPerPage() {
+  pagination.page = 1; // reset to first page when rows per page changes
+  search(false);
+}
+
+function goToPage(newPage: number) {
+  if (newPage < 1) newPage = 1;
+  if (newPage > totalPages.value) newPage = totalPages.value;
+  pagination.page = newPage;
+  search(false);
+}
+
 
 const search_inputs = ref({ filename: '', description: '' });
 
@@ -88,7 +113,7 @@ function selectRow(row: Row) {
 }
 
 async function search(update_total = true) {
-  const { rowsPerPage, page } = pagination.value;
+  const { rowsPerPage, page } = pagination;
   const offset = update_total ? 0 : rowsPerPage * (page - 1);
   const params: Record<string, any> = { offset, limit: rowsPerPage, experiment_id: selected_experiment.value };
   const { filename } = search_inputs.value;
@@ -98,8 +123,8 @@ async function search(update_total = true) {
   if (update_total) {
     const fullCount = await api_get(ncnr_metadata_api, endpoint, { ...params, full_count: true });
     if (fullCount.length) {
-      pagination.value.rowsNumber = fullCount[0]?.full_count ?? 0;
-      pagination.value.page = 1;
+      pagination.rowsNumber = fullCount[0]?.full_count ?? 0;
+      pagination.page = 1;
     }
   }
   rows.value = await api_get(ncnr_metadata_api, endpoint, params);

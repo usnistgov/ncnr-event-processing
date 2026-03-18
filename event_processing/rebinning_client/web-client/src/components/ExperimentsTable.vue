@@ -34,13 +34,21 @@
             </tr>
           </tbody>
         </table>
+            <PaginationControls
+  :rows-per-page="pagination.rowsPerPage"
+  :page="pagination.page"
+  :rows-number="pagination.rowsNumber"
+  @updateRowsPerPage="updateRowsPerPage"
+  @goToPage="goToPage"
+/>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, reactive, computed } from 'vue';
+import PaginationControls from './PaginationControls.vue';
 import { api_get, ncnr_metadata_api, all_instruments, selected_experiment, active_tab } from '@/store';
 
 const endpoint = 'experiments';
@@ -68,7 +76,24 @@ interface APISearchParams {
 
 const rows = ref<Row[]>([]);
 const selected = ref<Row[]>([]);
-const pagination = ref({ rowsPerPage: 10, descending: true, sortBy: 'date', page: 0, rowsNumber: 0 });
+const pagination = reactive({ rowsPerPage: 10, descending: true, sortBy: 'date', page: 1, rowsNumber: 0 });
+
+// computed total pages
+const totalPages = computed(() => {
+  return pagination.rowsNumber > 0 ? Math.ceil(pagination.rowsNumber / pagination.rowsPerPage) : 1;
+});
+
+function updateRowsPerPage() {
+  pagination.page = 1; // reset to first page when rows per page changes
+  search(false);
+}
+
+function goToPage(newPage: number) {
+  if (newPage < 1) newPage = 1;
+  if (newPage > totalPages.value) newPage = totalPages.value;
+  pagination.page = newPage;
+  search(false);
+}
 
 const search_inputs = ref({ instrument_name: '', experiment_title: '', experiment_id: '', participant_name: '' });
 
@@ -92,7 +117,7 @@ function selectRow(row: Row) {
 const instrument_names = ['vsans', 'macs', 'candor'];
 
 async function search(update_total = true) {
-  const { rowsPerPage, page } = pagination.value;
+  const { rowsPerPage, page } = pagination;
   const offset = update_total ? 0 : rowsPerPage * (page - 1);
   const params: APISearchParams = { offset, limit: rowsPerPage };
   const { instrument_name, participant_name, experiment_id, experiment_title } = search_inputs.value;
@@ -107,8 +132,8 @@ async function search(update_total = true) {
     const full_count_params = { ...params, full_count: true } as APISearchParams;
     const full_count_result = await api_get(ncnr_metadata_api, endpoint, full_count_params);
     if (full_count_result.length) {
-      pagination.value.rowsNumber = full_count_result[0]?.full_count ?? 0;
-      pagination.value.page = 1;
+      pagination.rowsNumber = full_count_result[0]?.full_count ?? 0;
+      pagination.page = 1;
     }
   }
   const r = await api_get(ncnr_metadata_api, endpoint, params);
@@ -116,8 +141,8 @@ async function search(update_total = true) {
 }
 
 async function pagination_request_handler(request: { pagination: { rowsPerPage: number; page: number } }) {
-  pagination.value.rowsPerPage = request.pagination.rowsPerPage;
-  pagination.value.page = request.pagination.page;
+  pagination.rowsPerPage = request.pagination.rowsPerPage;
+  pagination.page = request.pagination.page;
   await search(false);
 }
 
