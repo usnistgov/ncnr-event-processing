@@ -3,18 +3,33 @@ import os
 
 import requests
 import h5py
+from importlib import resources
+
+# 'my_package.certs' is the dot-notation to your folder
+# 'server_chain.pem' is the actual file
+
+
+# Use it in your request
+#response = requests.get('https://your-server.com', verify=str(cert_path))
+
+#print(response.status_code)
 
 NEXUS_FOLDER = Path("cache/nexus_files").absolute()
 METADATA_ENDPOINT = "https://charlotte.ncnr.nist.gov/ncnrdata/metadata/api/v1"
+METADATA_CERTFILE_NAME = "charlotte-ncnr-nist-gov-chain.pem"
 NCNRDATA_ENDPOINT = "https://ncnr.nist.gov/pub/ncnrdata/"
 #NCNRDATA_ENDPOINT = "https://charlotte.ncnr.nist.gov/pub/ncnrdata/"
+
+pkg_files = resources.files('event_processing.certs')
+cert_path = pkg_files / METADATA_CERTFILE_NAME
+os.environ['REQUESTS_CA_BUNDLE'] = str(cert_path)
 
 def search_filename(nexusfile):
     """Lookup the download path for a nexus file given its name"""
     # Need cycle and experiment ID to retrieve nexus file.
     url = METADATA_ENDPOINT + "/datafiles"
     print(f"Finding location of {nexusfile} using {url}")
-    r = requests.get(url, params={"filename": nexusfile}, verify=False)
+    r = requests.get(url, params={"filename": nexusfile})
     if not r.ok:
         raise RuntimeError(f"Nexus lookup <{url}?filename={nexusfile}> failed.")
     location = r.json()[0]["localdir"]
