@@ -623,8 +623,8 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # are dumped in later (not the usual condition)
     topic = f"{instrument}_sync"
     # TODO: remove these fallbacks when kafka stream is fixed
-    start_time = arm_time * 1000 # fall back to arm time if no start_time in stream
-    stop_time = disarm_time * 1000 # fall back to disarm time if no stop_time in stream
+    start_time = arm_time # fall back to arm time if no start_time in stream
+    stop_time = disarm_time # fall back to disarm time if no stop_time in stream
     #search_start, search_stop = arm_time, disarm_time
     search_start, search_stop = 0, int(1e15)
     stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=timeout_ms)
@@ -636,24 +636,29 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         if record['timestamp'] > disarm_time:
             break
         if record['syncType'] == "GATE_ON":
-            #print("GATE_ON", message.timestamp, record.timestamp)
+            # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
+            # print("GATE_ON", message, record)
             start_time = record['timestamp']
         elif record['syncType'] == "GATE_OFF":
-            #print("GATE_OFF", message.timestamp, record.timestamp)
+            # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
+            # print("GATE_OFF", message, record)
             stop_time = record['timestamp']
         else:
             db.trigger(record['timestamp'])
     db.set_times(start_time, stop_time, arm_time, disarm_time)
     #print(f"gating [{start_time}-{stop_time}] in [{arm_time}-{disarm_time}]")
 
-    start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
-    if stop_us < start_us:
-        raise RuntimeError(f"No counter disarm for dataset {filename}")
+    # start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
+    start_ms, stop_ms = db.start // 1000000, db.stop // 1000000 # ns -> ms
+    print("processing...")
+    if stop_ms < start_ms:
+        print(f"{instrument} {start_ms} {stop_ms}")
+        raise RuntimeError(f"No counter disarm for entry {entry}")
     for channel in ('monitor', 'detector', 'device'):
         topic = f"{instrument}_{channel}"
         total, n = 0, 0
         t_start = time.perf_counter_ns()
-        stream = stream_history(consumer, topic, start_us, stop_us, timeout_ms=timeout_ms)
+        stream = stream_history(consumer, topic, start_ms, stop_ms, timeout_ms=timeout_ms)
         for message in stream:
             t0 = time.perf_counter_ns()
             process_message(message, db)
