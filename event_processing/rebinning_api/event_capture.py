@@ -122,8 +122,8 @@ import numpy as np
 from . import nexus_util
 from . import data_cache
 
-REDPANDA_IP = "129.6.121.97"
-REDPANDA_STREAM_PORT = '9093'
+REDPANDA_IP = "129.6.10.216"
+REDPANDA_STREAM_PORT = '9092'
 PROJECT_ROOT = Path(__file__).absolute().parent
 #CACHE_ROOT = Path("/tmp/event_cache")
 EVENT_DATA_ROOT = Path("/tmp/event_files")
