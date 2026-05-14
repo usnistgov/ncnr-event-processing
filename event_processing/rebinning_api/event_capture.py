@@ -621,7 +621,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # could get really messy if the stream contains T0 triggers at a high rate.
     # If we can assume that the events are ordered but the message timestamps
     # are dumped in later (not the usual condition)
-    topic = f"syncInfo_{instrument}"
+    topic = f"{instrument}_sync"
     # TODO: remove these fallbacks when kafka stream is fixed
     start_time = arm_time * 1000 # fall back to arm time if no start_time in stream
     stop_time = disarm_time * 1000 # fall back to disarm time if no stop_time in stream
