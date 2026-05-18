@@ -109,6 +109,7 @@ import uuid
 from contextlib import contextmanager
 import json
 from urllib.request import urlopen
+import warnings
 
 from kafka import KafkaConsumer, TopicPartition
 from kafka.consumer.fetcher import ConsumerRecord
@@ -121,6 +122,7 @@ import numpy as np
 
 from . import nexus_util
 from . import data_cache
+from . import cleanup
 
 REDPANDA_IP = "129.6.10.216"
 REDPANDA_STREAM_PORT = '9092'
@@ -331,112 +333,11 @@ def event_cleanup(entry, raw_events, datapath=""):
     into numpy arrays with zero indexing into a compact array
     """
     instrument = lookup_instrument(entry)
-    if instrument == "vsans":
-        return _cleanup_vsans(entry, raw_events, datapath=datapath)
+    cleanup_fn = cleanup.CLEANUP_FNS.get(instrument, None)
+    if cleanup_fn is not None:
+        return cleanup_fn(entry, raw_events, datapath=datapath)
+
     raise NotImplementedError(f"Do not yet support events for {instrument}")
-
-# Velocity (m/s) <=> wavelength (A)
-#   lambda = h / p = h (eV) (J/eV) / ( m_n (kg) v (m/s) ) (10^10 A/m)
-# Since plancks constant is in eV
-#   lambda = (1e10 * h*electron_volt/(neutron_mass/N_A)) / velocity
-#: Planck's constant (eV s)
-plancks_constant = 4.13566733e-15 #(10) eV s
-#: Electron volt (J/eV)
-electron_volt = 1.602176487e-19 #(40) J / eV
-# From NIST Reference on Constants, Units, and Uncertainty
-#   http://physics.nist.gov/cuu/index.html
-# neutron mass = 1.008 664 915 97(43) u
-# atomic mass constant m_u = 1.660 538 782(83) x 10-27 kg
-#: neutron mass (u)
-neutron_mass = 1.00866491597 #(43) u
-#: atomic mass constant (kg / u)
-atomic_mass_constant = 1.660538782e-27 #(83) kg / u
-VELOCITY_FACTOR = (plancks_constant*electron_volt
-                   / (neutron_mass * atomic_mass_constant)) * 1e10
-def neutron_velocity(wavelength):
-    return VELOCITY_FACTOR / wavelength
-
-def _cleanup_vsans(entry, raw_events, datapath=""):
-    make_table = False
-    # Table data extracted from sans72110.nxs.ngv
-    # det  yrange   events =? integrated
-    # 0:FR   0:47     9012 =? 9013    NO!!!
-    # 1:FT  48:95     7834 =? 7834    yes
-    # 2:FB  96:143    6304 =? 6304    yes
-    # 3:FL 144:191    9682 =? 9683    NO!!!
-    # 4:MB  96:143    5137 =? 5137    yes
-    # 5:MR   0:47    10143 =? 10143   yes
-    # 6:ML 144:191   10328 =? 6776    NO!!!
-    # 7:MT  48:95     6507 =? 6508    NO!!!
-
-    # TODO: caller has datapath
-    cycle = "*"
-    proposal = entry["DAS_logs/experiment/proposalId"][0]
-    filename = entry["DAS_logs/trajectoryData/fileName"][0]
-    datapath = f"vsans/{cycle}/{proposal}/data/{filename}.nxs.ngv" if not datapath else datapath
-    # TODO: need to associated redpanda detector number with nexus detector field
-    start = raw_events.start
-    wavelength = entry["instrument/beam/monochromator/wavelength"][0]
-    wavelength_spread = entry["instrument/beam/monochromator/wavelength_spread"][0]
-    #print(f"{wavelength=} {wavelength_spread=}")
-    detectors = list("FR FT FB FL MB MR ML MT R".split())
-    result = {}
-    events = {}
-    if make_table:
-        print(f"    # Table data extracted from {datapath}")
-        print(f"    # det  yrange   events =? integrated")
-    for k, name in enumerate(detectors):
-        nxdetector = entry.get(f"instrument/detector_{name}", None)
-        if nxdetector is None:
-            logging.warn(f"Missing {entry.name}/instrument/detector_{name} in {datapath}")
-            continue
-        distance = nxdetector["distance"][0]
-        travel_time = int(1e8 * distance / neutron_velocity(wavelength)) # cm / (m/s) * 1e8 = ns
-        #print(f"detector_{name}/distance: {distance} travel time {int(travel_time/1e6)} ms")
-        DAS = entry[nxdetector["data"].attrs['target']].parent
-        dims = tuple(DAS['dimension'][()])
-        #print(f"detector_{name}->{DAS.name} {dims=}")
-        key = f"detector_{k}"
-        if key in raw_events._fields:
-            columns = list(zip(*raw_events._fields[key]))
-            times, pixels = np.asarray(columns[0]), np.asarray(columns[1])
-        else:
-            times, pixels = np.zeros(0, dtype='int64'), np.zeros(0, dtype='int64')
-        y, x = pixels >> 16, pixels & 0xFFFF
-        if make_table:
-            num_events = len(pixels)
-            counts = nxdetector["integrated_count"][0]
-            match = "yes" if counts == num_events else "NO!!!"
-            print(f"    # {k}:{name} {y.min():3d}:{y.max():<3d} {num_events:7d} =? {counts:<7d} {match}")
-            #print("  x", x)
-            #print("  y", y)
-        if name == "R":
-            pass
-        elif name[1] == "R": # offset=0, fliplr
-            x, y = x, 47-y
-        elif name[1] == "L": # offset=144, flipud
-            x, y = 127-x, y-144
-        elif name[1] == "T": # swapaxes offset=48
-            x, y = y-48, x
-        elif name[1] == "B": # swapaxes offset=96, fliplr, flipud
-            x, y = 143-y, 127-x
-        else:
-            raise UnreachableCode
-        #print(f"{k}:{name} {dims=} y:{y.min()}-{y.max():<3} x:{x.min()}-{x.max():<3}")
-        if not ((x>=0).all() and (x<dims[1]).all() and (y>=0).all() and (y<dims[0]).all()):
-            raise RuntimeError(f"Bad pixel id in {datapath}")
-        #print(f"times: {times.min()}:{times.max()} relative to {start}")
-        #print(f"subtracting {start} from {times[0]} = {times[0]-start}")
-        times -= start + travel_time
-        #print(f"times: {times.min()/1e9:.3f}:{times.max()/1e9:.3f} relative to {int(start//1e9)}")
-        # TODO: correct times for time of flight from wavelength and distance
-        events[f"detector_{name}"] = dict(dims=dims, ts=times, x=x, y=y)
-    # Treat the monitor as a detector named "monitor" so that we don't need
-    # special handling during rebinning.
-    monitors = raw_events._fields.get("monitors", [])
-    if monitors:
-        events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
-    return dict(detectors=events)
 
 def process_trigger(message, db: EventsManager):
     record = TIMING_SCHEMA(message)
@@ -547,7 +448,10 @@ def parse_timestamp(field):
 INSTRUMENTS = {
     'NG3-VSANS': 'vsans',
     'NCNR Candor': 'candor',
+    'SANS:NGB30': 'sans',
+    'SANS:NG7': 'sans',
     }
+
 def lookup_instrument(entry):
     name = entry['instrument/name'][0].decode('utf8')
     return INSTRUMENTS[name]
@@ -571,15 +475,18 @@ def run_fetch(files):
         for filename in files:
             fetch_events_for_file(consumer, filename)
 
-def fetch_events_for_file(consumer, filename, datapath=None):
+def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
     print("fetching events for", filename)
     nexus = data_cache.load_nexus(filename, datapath)
     dbs = []
     try:
         for entry_name in nexus_util.nexus_entries(nexus):
             entry = nexus[entry_name]
-            for point, start in enumerate(entry['DAS_logs/counter/eventStartTime']):
-                dbs.append(_fetch_events_for_point(consumer, entry, point))
+            for point, _start in enumerate(entry['DAS_logs/counter/eventStartTime']):
+                point_events = _fetch_events_for_point(consumer, entry, point)
+                if cleanup:
+                    point_events = event_cleanup(entry, point_events, datapath=datapath)
+                dbs.append(point_events)
     finally:
         nexus.close()
     return dbs
