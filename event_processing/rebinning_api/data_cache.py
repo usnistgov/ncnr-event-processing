@@ -22,14 +22,13 @@ NCNRDATA_ENDPOINT = "https://ncnr.nist.gov/pub/ncnrdata/"
 
 pkg_files = resources.files('event_processing.certs')
 cert_path = pkg_files / METADATA_CERTFILE_NAME
-os.environ['REQUESTS_CA_BUNDLE'] = str(cert_path)
 
 def search_filename(nexusfile):
     """Lookup the download path for a nexus file given its name"""
     # Need cycle and experiment ID to retrieve nexus file.
     url = METADATA_ENDPOINT + "/datafiles"
     print(f"Finding location of {nexusfile} using {url}")
-    r = requests.get(url, params={"filename": nexusfile})
+    r = requests.get(url, params={"filename": nexusfile}, verify=str(cert_path))
     if not r.ok:
         raise RuntimeError(f"Nexus lookup <{url}?filename={nexusfile}> failed.")
     location = r.json()[0]["localdir"]
@@ -48,7 +47,7 @@ def cache_url(url, cachedir, filename=None, refresh=False):
     cachedir.mkdir(parents=True, exist_ok=True)
     fullpath = cachedir / filename
     if refresh or not fullpath.exists():
-        print(f"Fecthing {url} into {filename}")
+        print(f"Fetching {url} into {filename}")
         r = requests.get(url)
         if not r.ok:
             raise RuntimeError(f"Fetch <{url}> failed.")
