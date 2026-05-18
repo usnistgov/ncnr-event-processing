@@ -104,7 +104,7 @@ from pathlib import Path
 from io import BytesIO
 import logging
 from datetime import datetime
-from typing import Dict, Iterable, List, NamedTuple, Optional
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional
 import uuid
 from contextlib import contextmanager
 import json
@@ -239,6 +239,7 @@ class EventsManager:
     disarm: int = 0
     start: int = 0 # Count start time
     stop: int = 0 # Count stop time
+    _fields: dict[str, Any]
  
     def __init__(self, path, mode='w'):
         """
@@ -291,6 +292,9 @@ class EventsManager:
         #print("recording counts", name)
         self._create_or_extend_pairs(name, neutrons, 'pixel', '<i4')
 
+    def get_detectors(self):
+        return dict((k, v) for k, v in self._fields.items() if k.startswith('detector_'))
+
     def _create_or_extend_timestamp(self, name, events):
         #print(f"extend {name} timestamp", events)
         data = self._fields.setdefault(name, [])
@@ -318,7 +322,7 @@ class EventsManager:
         #self._fields[val_name].write(values.data)
 
 
-def event_cleanup(entry, raw_events):
+def event_cleanup(entry, raw_events, datapath=""):
     """
     Translate the events from event manager into a form that can be fed to
     rebinning. That means converting pixels into detector index values,
@@ -328,7 +332,7 @@ def event_cleanup(entry, raw_events):
     """
     instrument = lookup_instrument(entry)
     if instrument == "vsans":
-        return _cleanup_vsans(entry, raw_events)
+        return _cleanup_vsans(entry, raw_events, datapath=datapath)
     raise NotImplementedError(f"Do not yet support events for {instrument}")
 
 # Velocity (m/s) <=> wavelength (A)
@@ -352,7 +356,7 @@ VELOCITY_FACTOR = (plancks_constant*electron_volt
 def neutron_velocity(wavelength):
     return VELOCITY_FACTOR / wavelength
 
-def _cleanup_vsans(entry, raw_events):
+def _cleanup_vsans(entry, raw_events, datapath=""):
     make_table = False
     # Table data extracted from sans72110.nxs.ngv
     # det  yrange   events =? integrated
@@ -369,7 +373,7 @@ def _cleanup_vsans(entry, raw_events):
     cycle = "*"
     proposal = entry["DAS_logs/experiment/proposalId"][0]
     filename = entry["DAS_logs/trajectoryData/fileName"][0]
-    datapath = f"vsans/{cycle}/{proposal}/data/{filename}.nxs.ngv"
+    datapath = f"vsans/{cycle}/{proposal}/data/{filename}.nxs.ngv" if not datapath else datapath
     # TODO: need to associated redpanda detector number with nexus detector field
     start = raw_events.start
     wavelength = entry["instrument/beam/monochromator/wavelength"][0]
@@ -434,19 +438,19 @@ def _cleanup_vsans(entry, raw_events):
         events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
     return dict(detectors=events)
 
-def process_trigger(message, db):
+def process_trigger(message, db: EventsManager):
     record = TIMING_SCHEMA(message)
     trigger_str, timestamp = record['syncType'], record['timestamp']
     if trigger_str == "T0":
         db.trigger(timestamp)
 
-def process_detector(message, db):
-    record = DETECTOR_SCHEMA(message)
+def process_detector(message: ConsumerRecord, db: EventsManager):
+    record: dict = DETECTOR_SCHEMA(message)
     neutrons = ((n['timestamp'], n['pixel_id']) for n in record['neutrons'])
     detector = f"detector_{message.partition}"
     db.counts(detector, neutrons)
 
-def process_monitor(message, db):
+def process_monitor(message, db: EventsManager):
     record = DETECTOR_SCHEMA(message)
     #neutrons = ((n['timestamp'], n['pixel_id']) for n in record['neutrons'])
     events = ((n['timestamp'],) for n in record['neutrons'])
@@ -472,7 +476,7 @@ PROCESSOR = dict(
     device=process_device,
     )
 
-def process_message(message, db):
+def process_message(message: ConsumerRecord, db: EventsManager):
     if db is not None:
         processor = PROCESSOR[message.topic.rsplit('_', 1)[-1]]
         processor(message, db)
@@ -626,7 +630,13 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     start_time = arm_time # fall back to arm time if no start_time in stream
     stop_time = disarm_time # fall back to disarm time if no stop_time in stream
     #search_start, search_stop = arm_time, disarm_time
+
+    # TODO: remove this check when topics stabilize.
+    available_topics = consumer.topics()
+
     search_start, search_stop = 0, int(1e15)
+    # TODO: need to keep track of previously retrieved offsets so we don't
+    # have to search the whole stream, can put bounds (sqlite?)
     stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=timeout_ms)
     for message in stream:
         record = TIMING_SCHEMA(message)
@@ -646,6 +656,9 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         else:
             db.trigger(record['timestamp'])
     db.set_times(start_time, stop_time, arm_time, disarm_time)
+
+
+
     #print(f"gating [{start_time}-{stop_time}] in [{arm_time}-{disarm_time}]")
 
     # start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
@@ -657,6 +670,11 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     for channel in ('monitor', 'detector', 'device'):
         topic = f"{instrument}_{channel}"
         total, n = 0, 0
+        # Check if the topic exists BEFORE calling stream_history
+        if topic not in available_topics:
+            print(f"Skipping {topic} - not found in broker")
+            continue
+
         t_start = time.perf_counter_ns()
         stream = stream_history(consumer, topic, start_ms, stop_ms, timeout_ms=timeout_ms)
         for message in stream:
