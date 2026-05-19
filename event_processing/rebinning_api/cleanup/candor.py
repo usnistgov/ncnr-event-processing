@@ -6,7 +6,7 @@ from .util import travel_time, get_partition, neutron_velocity
 if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager
 
-DEBUG = True
+DEBUG = False
 
 DETECTOR_MEAN_DISTANCE = 400 # cm
 DETECTOR_LENGTH = 100 # cm
@@ -61,7 +61,6 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
         columns = list(zip(*values))
         times, pixel_ids = np.asarray(columns[0]), np.asarray(columns[1])
-        print(f"times: {times}")
 
         # key = f"detector_{k}"
         # if key in raw_events._fields:
