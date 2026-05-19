@@ -107,6 +107,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional
 import uuid
 from contextlib import contextmanager
+from functools import lru_cache
 import json
 from urllib.request import urlopen
 import warnings
@@ -135,42 +136,12 @@ GATE_ON, GATE_OFF, TO_SYNC = "GATE_ON", "GATE_OFF", "TO_SYNC"
 
 DEFAULT_SCHEMA_VERSION = 1
 
-DECODER_REGISTRY = dict[tuple[str, int], Any]()
-
-def get_decoder(schema_name: str, version: int):
-    key = (schema_name, version)
-    decoder = DECODER_REGISTRY.get(key, None)
-    if decoder is None:
-        decoder = fetch_schema(schema_name, version)
-        DECODER_REGISTRY[key] = decoder
-        print(f"Registered decoder for {key}")
-    return decoder
-
-def fetch_schema(schema_name, version=1):
-    url = f"http://{REDPANDA_IP}:8081/subjects/{schema_name}-value/versions"
-    versions = json.loads(urlopen(url).read())
-    latest = max(versions)
-    if version != latest:
-        # TODO: Figure out how we are going to handle version changes to schema.
-        # Nominally avro maintains backward compatibility
-        # so older packets are autoupgraded to the latest schema. That means
-        # if we are asking for a schema version that is not the latest then
-        # we need to upgrade our code. Once we are up to date we should be
-        # able to process packets from older versions of the schema. So
-        # throwing an exception here is reasonable: we need to fix the server
-        # before proceeding.
-        raise TypeError(f"Asking for {schema_name} v{version} but latest is v{latest}. Upgrade your stream processing code.")
-    data = json.loads(urlopen(f"{url}/latest").read())
+@lru_cache
+def get_decoder(id: int):
+    url = f"http://{REDPANDA_IP}:8081/schemas/ids/{id}"
+    data = json.loads(urlopen(url).read())
     schema = data['schema']
-    #return avro_decoder(schema) if 'enum' in schema else fastavro_decoder(schema)
     return avro_decoder(schema)
-
-#def load_schema(schema_name, version=1):
-#    if version > 2:
-#        topic = f"{schema_name}_v{version}"
-#    filename = ROOT / "schema" / f"{schema_name}.avsc"
-#    schema = fastavro.schema.load_schema(filename)
-#    return schema
 
 def avro_decoder(schema):
     from types import SimpleNamespace
@@ -331,7 +302,7 @@ def event_cleanup(entry, raw_events, datapath=""):
 
     raise NotImplementedError(f"Do not yet support events for {instrument}")
 
-def get_schema_version(message: ConsumerRecord):
+def get_schema_id_confluent_prefix(message: ConsumerRecord):
     """ this function assumes version is encoded in Confluent payload prefix, if it exists"""
     magic_byte = message.value[0]
     schema_most_significant_byte = message.value[1]
@@ -345,32 +316,54 @@ def get_schema_version(message: ConsumerRecord):
         #     and this will have length < 5
 
         schema_id = int.from_bytes(message.value[1:5], byteorder='big', signed=True)
-        print(f"getting schema_id from confluent payload header: {schema_id} (message bytes: {message.value})")
+        logging.debug(f"getting schema_id from confluent payload header: {schema_id} (message bytes: {message.value})")
     else:
         # no schema ID, so use the default schema version
         schema_id = DEFAULT_SCHEMA_VERSION
-        print(f"using default schema version: {schema_id}")
+        logging.debug(f"using default schema version: {schema_id}")
     return schema_id
 
+def get_schema_id(message: ConsumerRecord, default: int):
+    """ 
+    Extract the global schema id from the message
+    This function assumes version is encoded in the kafka message header,
+    and if not returns version specified in "default" argument
+
+    Header message format: ("v", <byte>) where the byte value is to be interpreted
+    as uint8 (schema version)
+    """
+    headers = message.headers
+    if headers is not None:
+        for key, value in headers:
+            if key == "v":
+                schema_id = int.from_bytes(value, byteorder='little', signed=False)
+                logging.debug(f"getting schema_version from kafka message header: {schema_id}")
+                return schema_id
+    logging.debug(f"no schema id found")
+    return default
+
 def process_trigger(message, db: EventsManager):
-    schema_version = get_schema_version(message)
-    decoder = get_decoder("syncInfo", schema_version)
+    # syncInfo-value schema id is originally 1 (default)
+    schema_id = get_schema_id(message, default=1)
+    decoder = get_decoder(schema_id)
     record = decoder(message)
     trigger_str, timestamp = record['syncType'], record['timestamp']
     if trigger_str == "T0":
         db.trigger(timestamp)
 
 def process_detector(message: ConsumerRecord, db: EventsManager):
-    schema_version = get_schema_version(message)
-    decoder = get_decoder("neutron_packet", schema_version)
+    # neutron_detector-value schema id is originally 2 (default)
+    schema_id = get_schema_id(message, default=2)
+    decoder = get_decoder(schema_id)
     record: dict = decoder(message)
     neutrons = ((n['timestamp'], n['pixel_id']) for n in record['neutrons'])
     detector = f"detector_{message.partition}"
     db.counts(detector, neutrons)
 
 def process_monitor(message, db: EventsManager):
-    schema_version = get_schema_version(message)
-    decoder = get_decoder("neutron_packet", schema_version)
+    # monitor schema is neutron_detector-value schema (2)
+    schema_id = get_schema_id(message, default=2)
+    decoder = get_decoder(schema_id)
     record: dict = decoder(message)
     #neutrons = ((n['timestamp'], n['pixel_id']) for n in record['neutrons'])
     events = ((n['timestamp'],) for n in record['neutrons'])
@@ -383,9 +376,13 @@ def process_monitor(message, db: EventsManager):
 # we would also save the device value at disarm before closing out the
 # previous file, but this is harder to do.
 DEVICE_STATUS = {}
+
+# TODO: add sample environment (needs new topic per instrument)
+# messages will be JSON, not avro packets
+
 def process_device(message, db):
-    schema_version = get_schema_version(message)
-    decoder = get_decoder("device", schema_version)
+    schema_id = get_schema_id(message, default=3)
+    decoder = get_decoder(schema_id)
     record = decoder(message)
     device, value, timestamp = record['device'], record['value'], record['timestamp']
     DEVICE_STATUS[device] = (timestamp, value)
@@ -409,7 +406,7 @@ class OffsetAndTimestamp(kafka.structs.OffsetAndTimestamp):
     timestamp: int
     leader_epoch: Optional[int]
 
-def stream_history(consumer: KafkaConsumer, topic: str, start: int, stop: int, partitions: Optional[Iterable[int]] = None, timeout_ms: int = 100):
+def stream_history_old(consumer: KafkaConsumer, topic: str, start: int, stop: int, partitions: Optional[Iterable[int]] = None, timeout_ms: int = 100):
     if partitions is None:
         partitions = consumer.partitions_for_topic(topic)
         if partitions is None: # vsans_device doesn't exist yet...
@@ -460,6 +457,71 @@ def stream_history(consumer: KafkaConsumer, topic: str, start: int, stop: int, p
                     break
                 yield message
 
+def stream_history(consumer: KafkaConsumer, topic: str, start: int, stop: int, partitions: Optional[Iterable[int]] = None, timeout_ms: int = 10):
+    if partitions is None:
+        partitions = consumer.partitions_for_topic(topic)
+        if partitions is None:
+            return
+
+    print(f"stream {topic} {partitions} in [{start}, {stop}]")
+
+    # 1. Bulk-create handles for ALL partitions
+    tps = [TopicPartition(topic, pid) for pid in partitions]
+
+    # 2. BATCH ASSIGN & IMMEDIATELY PAUSE: Keep all pipes open but quiet
+    consumer.assign(tps)
+    consumer.pause(*tps)
+
+    try:
+        # 3. BATCH LOOKUP: Fetch all boundaries in exactly TWO network requests
+        timestamps_search = {tp: start for tp in tps}
+        all_start_offsets = consumer.offsets_for_times(timestamps_search)
+        all_end_offsets = consumer.end_offsets(tps)
+
+        for tp in tps:
+            if all_start_offsets is None or all_start_offsets.get(tp) is None:
+                logging.warning(f"{topic}[{tp.partition}] offset not found for timestamp {start}")
+                continue 
+
+            start_offset = all_start_offsets[tp].offset
+            end_offset = all_end_offsets[tp]
+
+            # If the partition has no data in this region, skip it safely
+            if start_offset >= end_offset:
+                continue
+
+            logging.debug(f"partition[{tp.partition}] streaming from offset {start_offset} to {end_offset}")
+
+            # 4. HOT SWITCH: Just resume and seek, no heavy assign() teardown required
+            consumer.resume(tp)
+            consumer.seek(tp, start_offset)
+
+            # 5. DETERMINISTIC SCAN: Run explicitly until our position hits the endpoint
+            while consumer.position(tp) < end_offset:
+                batches = consumer.poll(timeout_ms=timeout_ms)
+
+                if not batches or tp not in batches:
+                    continue
+
+                messages: List[ConsumerRecord] = batches[tp]
+                broken_by_time = False
+
+                for message in messages:
+                    if message.timestamp >= stop:
+                        broken_by_time = True
+                        break
+
+                    yield message
+
+                if broken_by_time:
+                    break
+
+            # 6. PAUSE AGAIN: Quiet this partition before moving to the next one
+            consumer.pause(tp)
+
+    finally:
+        consumer.assign([])
+
 def parse_timestamp(field):
     timestamp = field[0].decode('utf8')
     dt = datetime.fromisoformat(timestamp)
@@ -497,7 +559,7 @@ def run_fetch(files):
 
 def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
     print("fetching events for", filename)
-    nexus = data_cache.load_nexus(filename, datapath)
+    nexus = data_cache.load_nexus(filename)
     dbs = []
     try:
         for entry_name in nexus_util.nexus_entries(nexus):
@@ -566,8 +628,8 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # have to search the whole stream, can put bounds (sqlite?)
     stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=timeout_ms)
     for message in stream:
-        schema_version = get_schema_version(message)
-        decoder = get_decoder("syncInfo", schema_version)
+        schema_id = get_schema_id(message, default=1)
+        decoder = get_decoder(schema_id)
         record = decoder(message)
         # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
         if record['timestamp'] < arm_time:
@@ -596,7 +658,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     if stop_ms < start_ms:
         print(f"{instrument} {start_ms} {stop_ms}")
         raise RuntimeError(f"No counter disarm for entry {entry}")
-    for channel in ('monitor', 'detector', 'device'):
+    for channel in ('monitor', 'detector'):
         topic = f"{instrument}_{channel}"
         total, n = 0, 0
         # Check if the topic exists BEFORE calling stream_history
