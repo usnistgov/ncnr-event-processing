@@ -133,6 +133,19 @@ EVENT_DATA_ROOT = Path("/tmp/event_files")
 GATE_ON, GATE_OFF, TO_SYNC = 0, 1, 2
 GATE_ON, GATE_OFF, TO_SYNC = "GATE_ON", "GATE_OFF", "TO_SYNC"
 
+DEFAULT_SCHEMA_VERSION = 1
+
+DECODER_REGISTRY = dict[tuple[str, int], Any]()
+
+def get_decoder(schema_name: str, version: int):
+    key = (schema_name, version)
+    decoder = DECODER_REGISTRY.get(key, None)
+    if decoder is None:
+        decoder = fetch_schema(schema_name, version)
+        DECODER_REGISTRY[key] = decoder
+        print(f"Registered decoder for {key}")
+    return decoder
+
 def fetch_schema(schema_name, version=1):
     url = f"http://{REDPANDA_IP}:8081/subjects/{schema_name}-value/versions"
     versions = json.loads(urlopen(url).read())
@@ -146,7 +159,7 @@ def fetch_schema(schema_name, version=1):
         # able to process packets from older versions of the schema. So
         # throwing an exception here is reasonable: we need to fix the server
         # before proceeding.
-        raise TypeError("Asking for {schema_name} v{version} but latest is v{latest}. Upgrade your stream processing code.")
+        raise TypeError(f"Asking for {schema_name} v{version} but latest is v{latest}. Upgrade your stream processing code.")
     data = json.loads(urlopen(f"{url}/latest").read())
     schema = data['schema']
     #return avro_decoder(schema) if 'enum' in schema else fastavro_decoder(schema)
@@ -173,27 +186,6 @@ def fastavro_decoder(schema):
         with BytesIO(message.value) as fd:
             return fastavro.read.schemaless_reader(fd, schema)
     return decoder
-
-EVENT_URL = None
-def setup_sim():
-    global EVENT_URL, DETECTOR_SCHEMA, TIMING_SCHEMA, DEVICE_SCHEMA #, METADATA_SCHEMA
-    if EVENT_URL is not None:
-        return
-    EVENT_URL = "ncnr-r9nano.campus.nist.gov:19092"
-    DETECTOR_SCHEMA = load_schema("neutron_packet", version=1)
-    TIMING_SCHEMA = load_schema("timing", version=1)
-    DEVICE_SCHEMA = load_schema("device", version=1)
-    #METADATA_SCHEMA = load_schema("metadata", version=1)
-
-def setup():
-    global EVENT_URL, DETECTOR_SCHEMA, TIMING_SCHEMA, DEVICE_SCHEMA #, METADATA_SCHEMA
-    if EVENT_URL is not None:
-        return
-    EVENT_URL = f"{REDPANDA_IP}:{REDPANDA_STREAM_PORT}"
-    DETECTOR_SCHEMA = fetch_schema("neutron_packet", version=1)
-    TIMING_SCHEMA = fetch_schema("syncInfo", version=1)
-    #DEVICE_SCHEMA = load_schema("device", version=1)
-    #METADATA_SCHEMA = load_schema("metadata", version=1)
 
 
 @contextmanager
@@ -339,20 +331,47 @@ def event_cleanup(entry, raw_events, datapath=""):
 
     raise NotImplementedError(f"Do not yet support events for {instrument}")
 
+def get_schema_version(message: ConsumerRecord):
+    """ this function assumes version is encoded in Confluent payload prefix, if it exists"""
+    magic_byte = message.value[0]
+    schema_most_significant_byte = message.value[1]
+
+    if magic_byte == 0 and schema_most_significant_byte == 0 and len(message.value) > 5:
+        # Confluent wire format: first byte is magic byte, then 4 bytes are the schema ID '>i'
+        # https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format-schema-id-in-the-payload-prefix
+        # * Most significant byte of Confluent version id is 0 for schema id < 16,000,000
+        # * Only possible message from neutron_packet and syncInfo schemas starting with
+        #     \x00\x00 is an empty neutron_packet message (no neutron events),
+        #     and this will have length < 5
+
+        schema_id = int.from_bytes(message.value[1:5], byteorder='big', signed=True)
+        print(f"getting schema_id from confluent payload header: {schema_id} (message bytes: {message.value})")
+    else:
+        # no schema ID, so use the default schema version
+        schema_id = DEFAULT_SCHEMA_VERSION
+        print(f"using default schema version: {schema_id}")
+    return schema_id
+
 def process_trigger(message, db: EventsManager):
-    record = TIMING_SCHEMA(message)
+    schema_version = get_schema_version(message)
+    decoder = get_decoder("syncInfo", schema_version)
+    record = decoder(message)
     trigger_str, timestamp = record['syncType'], record['timestamp']
     if trigger_str == "T0":
         db.trigger(timestamp)
 
 def process_detector(message: ConsumerRecord, db: EventsManager):
-    record: dict = DETECTOR_SCHEMA(message)
+    schema_version = get_schema_version(message)
+    decoder = get_decoder("neutron_packet", schema_version)
+    record: dict = decoder(message)
     neutrons = ((n['timestamp'], n['pixel_id']) for n in record['neutrons'])
     detector = f"detector_{message.partition}"
     db.counts(detector, neutrons)
 
 def process_monitor(message, db: EventsManager):
-    record = DETECTOR_SCHEMA(message)
+    schema_version = get_schema_version(message)
+    decoder = get_decoder("neutron_packet", schema_version)
+    record: dict = decoder(message)
     #neutrons = ((n['timestamp'], n['pixel_id']) for n in record['neutrons'])
     events = ((n['timestamp'],) for n in record['neutrons'])
     #events = list(events); print("monitor", events, type(events[0]))
@@ -365,7 +384,9 @@ def process_monitor(message, db: EventsManager):
 # previous file, but this is harder to do.
 DEVICE_STATUS = {}
 def process_device(message, db):
-    record = DEVICE_SCHEMA(message)
+    schema_version = get_schema_version(message)
+    decoder = get_decoder("device", schema_version)
+    record = decoder(message)
     device, value, timestamp = record['device'], record['value'], record['timestamp']
     DEVICE_STATUS[device] = (timestamp, value)
     db.device(device, value, timestamp)
@@ -387,7 +408,6 @@ class OffsetAndTimestamp(kafka.structs.OffsetAndTimestamp):
     offset: int
     timestamp: int
     leader_epoch: Optional[int]
-
 
 def stream_history(consumer: KafkaConsumer, topic: str, start: int, stop: int, partitions: Optional[Iterable[int]] = None, timeout_ms: int = 100):
     if partitions is None:
@@ -428,7 +448,7 @@ def stream_history(consumer: KafkaConsumer, topic: str, start: int, stop: int, p
         #print("reading messages")
         done = False
         while not done:
-            batches = consumer.poll(timeout_ms=500)
+            batches = consumer.poll(timeout_ms=timeout_ms)
             if not batches:
                 break
             messages: List[ConsumerRecord] = batches[partition_handle]
@@ -546,7 +566,9 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # have to search the whole stream, can put bounds (sqlite?)
     stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=timeout_ms)
     for message in stream:
-        record = TIMING_SCHEMA(message)
+        schema_version = get_schema_version(message)
+        decoder = get_decoder("syncInfo", schema_version)
+        record = decoder(message)
         # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
         if record['timestamp'] < arm_time:
             continue
