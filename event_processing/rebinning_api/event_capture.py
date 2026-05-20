@@ -530,8 +530,8 @@ def parse_timestamp(field):
 INSTRUMENTS = {
     'NG3-VSANS': 'vsans',
     'NCNR Candor': 'candor',
-    'SANS:NGB30': 'sans',
-    'SANS:NG7': 'sans',
+    'SANS:NGB30': 'ngb30msans',
+    'SANS:NG7': 'ng7sans',
     }
 
 def lookup_instrument(entry):
@@ -564,7 +564,7 @@ def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
     try:
         for entry_name in nexus_util.nexus_entries(nexus):
             entry = nexus[entry_name]
-            for point, _start in enumerate(entry['DAS_logs/counter/eventStartTime']):
+            for point, _start in enumerate(entry['DAS_logs/counter/startTime']):
                 point_events = _fetch_events_for_point(consumer, entry, point)
                 if cleanup:
                     point_events = event_cleanup(entry, point_events, datapath=datapath)
@@ -591,8 +591,14 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # so we can stop when we've reached the last message for the given nexus
     # file on that detector bank.
 
-    arm_time = entry["DAS_logs/counter/eventStartTime"][point]
-    disarm_time = entry["DAS_logs/counter/eventStopTime"][point]
+    if "DAS_logs/counter/eventStartTime" not in entry:
+        start_time = parse_timestamp(entry['start_time'])
+        arm_time = start_time + entry['DAS_logs/counter/startTime'][point] * 1e9 # s -> ns
+        disarm_time = start_time + entry['DAS_logs/counter/stopTime'][point] * 1e9 # s -> ns
+        print(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {start_time}")
+    else:
+        arm_time = entry["DAS_logs/counter/eventStartTime"][point]
+        disarm_time = entry["DAS_logs/counter/eventStopTime"][point]
     instrument = lookup_instrument(entry)
     #print(f"{instrument=}")
     # TODO: use nexus filename plus point number for easier file management
@@ -626,7 +632,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     search_start, search_stop = 0, int(1e15)
     # TODO: need to keep track of previously retrieved offsets so we don't
     # have to search the whole stream, can put bounds (sqlite?)
-    stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=timeout_ms)
+    stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=500)
     for message in stream:
         schema_id = get_schema_id(message, default=1)
         decoder = get_decoder(schema_id)
