@@ -79,17 +79,9 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
         if not ((x>=0).all() and (x<dims[0]).all() and (y>=0).all() and (y<dims[1]).all()):
             raise RuntimeError(f"Bad pixel id in {datapath}: x = {x.min()}:{x.max()} y = {y.min()}:{y.max()}")
-    
-        times -= start + time_correction
-        if DEBUG:
-            print(f"times: {times}")
-            print(f"wavelength: {wavelength}")
-            print(f"distance: {distance}")
-            print(f"extra_distance: {extra_distance}")
-            print(f"time_correction: {time_correction}")
-            print(f"x: {x}")
-            print(f"y: {y}")
-            print(f"dims: {dims}")
+
+        # BBM 2026-05-20: don't make relative timestamps here - that is a later step
+        times -= time_correction
 
         events[name] = dict(dims=dims, ts=times, x=x, y=y)
 
