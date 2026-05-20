@@ -480,7 +480,7 @@ def stream_history(consumer: KafkaConsumer, topic: str, start: int, stop: int, p
 
         for tp in tps:
             if all_start_offsets is None or all_start_offsets.get(tp) is None:
-                logging.warning(f"{topic}[{tp.partition}] offset not found for timestamp {start}")
+                logging.debug(f"{topic}[{tp.partition}] offset not found for timestamp {start}")
                 continue 
 
             start_offset = all_start_offsets[tp].offset
@@ -592,10 +592,10 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # file on that detector bank.
 
     if "DAS_logs/counter/eventStartTime" not in entry:
-        start_time = parse_timestamp(entry['start_time'])
-        arm_time = start_time + entry['DAS_logs/counter/startTime'][point] * 1e9 # s -> ns
-        disarm_time = start_time + entry['DAS_logs/counter/stopTime'][point] * 1e9 # s -> ns
-        print(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {start_time}")
+        entry_start_time = parse_timestamp(entry['start_time'])
+        arm_time = entry_start_time + entry['DAS_logs/counter/startTime'][point] * 1000 # s -> ms
+        disarm_time = entry_start_time + entry['DAS_logs/counter/stopTime'][point] * 1000 # s -> ms
+        print(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {start_times}")
     else:
         arm_time = entry["DAS_logs/counter/eventStartTime"][point]
         disarm_time = entry["DAS_logs/counter/eventStopTime"][point]
@@ -622,14 +622,16 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # are dumped in later (not the usual condition)
     topic = f"{instrument}_sync"
     # TODO: remove these fallbacks when kafka stream is fixed
-    start_time = arm_time # fall back to arm time if no start_time in stream
-    stop_time = disarm_time # fall back to disarm time if no stop_time in stream
+    start_times = []
+    stop_times = []
     #search_start, search_stop = arm_time, disarm_time
 
     # TODO: remove this check when topics stabilize.
     available_topics = consumer.topics()
 
-    search_start, search_stop = 0, int(1e15)
+    # Use the actual time range instead of searching from epoch
+    search_start = arm_time // 1000000  # ns -> ms
+    search_stop = disarm_time // 1000000  # ns -> ms
     # TODO: need to keep track of previously retrieved offsets so we don't
     # have to search the whole stream, can put bounds (sqlite?)
     stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=500)
@@ -645,42 +647,53 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         if record['syncType'] == "GATE_ON":
             # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
             # print("GATE_ON", message, record)
-            start_time = record['timestamp']
+            start_times.append(record['timestamp'])
         elif record['syncType'] == "GATE_OFF":
             # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
             # print("GATE_OFF", message, record)
-            stop_time = record['timestamp']
+            stop_times.append(record['timestamp'])
+        elif record['syncType'] == "T0":
+            db.trigger
         else:
-            db.trigger(record['timestamp'])
-    db.set_times(start_time, stop_time, arm_time, disarm_time)
+            raise ValueError(f"Unknown trigger type {record['syncType']}")
 
+    if len(start_times) != len(stop_times):
+        raise RuntimeError(f"Gate mismatch: {len(start_times)} GATE_ON, {len(stop_times)} GATE_OFF found in [{arm_time}-{disarm_time}]")
+    
+    if not start_times:
+        #no gate_on found, use arm_time
+        logging.warning(f"no GATE_ON found, using arm_time={arm_time}")
+        start_times = [arm_time] # fall back to arm time if no start_time in stream
+    if not stop_times:
+        #no gate_off found, use disarm_time
+        logging.warning(f"no GATE_OFF found, using disarm_time={disarm_time}")
+        stop_times = [disarm_time] # fall back to disarm time if no stop_time in stream
+    
+    db.set_times(start_times, stop_times, arm_time, disarm_time)
 
+    for start_time, stop_time in zip(start_times, stop_times):
+        # start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
+        start_ms, stop_ms = start_time // 1000000, stop_time // 1000000 # ns -> ms
+        if stop_ms < start_ms:
+            print(f"{instrument} {start_ms} {stop_ms}")
+            raise RuntimeError(f"No counter disarm for entry {entry}")
+        for channel in ('monitor', 'detector'):
+            topic = f"{instrument}_{channel}"
+            total, n = 0, 0
+            # Check if the topic exists BEFORE calling stream_history
+            if topic not in available_topics:
+                print(f"Skipping {topic} - not found in broker")
+                continue
 
-    #print(f"gating [{start_time}-{stop_time}] in [{arm_time}-{disarm_time}]")
-
-    # start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
-    start_ms, stop_ms = db.start // 1000000, db.stop // 1000000 # ns -> ms
-    print("processing...")
-    if stop_ms < start_ms:
-        print(f"{instrument} {start_ms} {stop_ms}")
-        raise RuntimeError(f"No counter disarm for entry {entry}")
-    for channel in ('monitor', 'detector'):
-        topic = f"{instrument}_{channel}"
-        total, n = 0, 0
-        # Check if the topic exists BEFORE calling stream_history
-        if topic not in available_topics:
-            print(f"Skipping {topic} - not found in broker")
-            continue
-
-        t_start = time.perf_counter_ns()
-        stream = stream_history(consumer, topic, start_ms, stop_ms, timeout_ms=timeout_ms)
-        for message in stream:
-            t0 = time.perf_counter_ns()
-            process_message(message, db)
-            total += time.perf_counter_ns() - t0
-            n += 1
-        with_kafka = time.perf_counter_ns() - t_start
-        print(f"Processing time for {n} messages in {topic} is {total/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
+            t_start = time.perf_counter_ns()
+            stream = stream_history(consumer, topic, start_ms, stop_ms, timeout_ms=timeout_ms)
+            for message in stream:
+                t0 = time.perf_counter_ns()
+                process_message(message, db)
+                total += time.perf_counter_ns() - t0
+                n += 1
+            with_kafka = time.perf_counter_ns() - t_start
+            print(f"Processing time for {n} messages in {topic} is {total/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
 
     db.close()
     return db
