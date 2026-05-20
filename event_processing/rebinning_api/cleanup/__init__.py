@@ -8,4 +8,5 @@ CLEANUP_FNS = {
     'candor': candor_cleanup,
     'vsans': vsans_cleanup,
     'sans': sans_cleanup,
+    'ngb30msans': sans_cleanup,
 }
