@@ -384,6 +384,7 @@ def drive_TofEstForCANDOR(detector_index: int = 0, nPoints: int = 0, noPlotFlag:
         Lsa=Lsa_arr[detector_index],
         Lad=Lad_arr[detector_index],
         nPoints=nPoints,
+        noPlotFlag=noPlotFlag,
     )
 
 
