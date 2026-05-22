@@ -200,11 +200,18 @@ class EventsManager:
 
     # Event stream metadata
     version: int = 1 # event file version
-    arm: int = 0
-    disarm: int = 0
-    start: int = 0 # Count start time
-    stop: int = 0 # Count stop time
+    arm: int = 0 # ms
+    disarm: int = 0 # ms
+    start: list[int] # Count start times (including pauses), in ns
+    stop: list[int]  # Count stop times, in ns
     _fields: dict[str, Any]
+    # cleaned fields: 
+    # {"detector_name": {
+    #     "ts": <ndarray int64 timestamps>,
+    #     "ts_sigma": <ndarray int64 uncertainty on timestamp>,
+    #     "x": <ndarray int>,
+    #     "y": <ndarray int> }}
+    _cleaned_fields: dict[str, Any]
  
     def __init__(self, path, mode='w'):
         """
@@ -567,7 +574,7 @@ def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
             for point, _start in enumerate(entry['DAS_logs/counter/startTime']):
                 point_events = _fetch_events_for_point(consumer, entry, point)
                 if cleanup:
-                    point_events = event_cleanup(entry, point_events, datapath=datapath)
+                    event_cleanup(entry, point_events, datapath=datapath)
                 dbs.append(point_events)
     finally:
         nexus.close()
@@ -653,7 +660,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
             # print("GATE_OFF", message, record)
             stop_times.append(record['timestamp'])
         elif record['syncType'] == "T0":
-            db.trigger
+            db.trigger(record['timestamp'])
         else:
             raise ValueError(f"Unknown trigger type {record['syncType']}")
 
