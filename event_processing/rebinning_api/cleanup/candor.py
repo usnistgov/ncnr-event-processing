@@ -1,23 +1,33 @@
+from functools import lru_cache
+import importlib.resources as pkg_resources
 import numpy as np
 import logging
 import typing
 
 from .util import travel_time, get_partition, neutron_velocity
+
 if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager
 
 DEBUG = False
-
-DETECTOR_MEAN_DISTANCE = 400 # cm
-DETECTOR_LENGTH = 100 # cm
 NUM_DETECTORS = 54
 
-def extra_detector_distance(x: int | np.ndarray, y: int | np.ndarray):
-    """ 
-    Returns a number between -0.5 * DETECTOR_LENGTH and 0.5 * DETECTOR_LENGTH
-    (assumes that recorded detector distance is to the center of the detector)
+@lru_cache
+def load_distances() -> np.ndarray:
     """
-    return ((x / NUM_DETECTORS) - 0.5) * DETECTOR_LENGTH
+    Load a text file containing distances from the package's source directory.
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Dict with keys ["index", "mean_distance_m", "sigma_distance_m", "sigma_wavelength_A"]
+    """
+    data_path = pkg_resources.files(__package__) / "source" / "candor_distances.dat"
+    with data_path.open("rb") as source_file:
+        data_array = np.genfromtxt(
+            source_file,
+            names=True,
+        )
+    return data_array
 
 def partition_to_detector(partition_name: str):
     return "PSD"
@@ -41,10 +51,17 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     # TODO: need to associated redpanda detector number with nexus detector field
     start = raw_events.start
     wavelength_calibration = entry["DAS_logs/detectorTable/wavelengths"][:]
-    wavelength_spread = entry["DAS_logs/detectorTable/wavelengthSpreads"][0]
+    wavelength_spread = entry["DAS_logs/detectorTable/wavelengthSpreads"][:]
     detector_partitions = raw_events.get_detectors()
 
-    result = {}
+    result = {
+        "dims": None,
+        "x": [],
+        "y": [],
+        "ts": [],
+        "ts_sigma": [],
+    }
+
     events = {}
     if make_table:
         print(f"    # Table data extracted from {datapath}")
@@ -69,25 +86,45 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         # else:
         #     times, pixel_ids = np.zeros(0, dtype='int64'), np.zeros(0, dtype='int64')
         x, y = to_detector_indices(pixel_ids)
-        wavelength = np.take(wavelength_calibration, x)
+        wavelength = wavelength_calibration[x, y]
+        wavelength_sigma = wavelength_spread[x, y]
 
-        base_distance = DETECTOR_MEAN_DISTANCE
-        extra_distance = extra_detector_distance(x, y)
-        distance = base_distance + extra_distance
+        distance_array = load_distances()
+        distance = distance_array["mean_distance_m"][x] * 100 # convert to cm
+        distance_sigma = distance_array["sigma_distance_m"][x] * 100 # convert to cm
 
-        time_correction = travel_time(distance, wavelength).astype(int)
+        time_correction = travel_time(distance, wavelength)
+        time_correction_sigma = time_correction * np.sqrt((distance_sigma/distance)**2 + (wavelength_sigma/wavelength)**2)
 
         if not ((x>=0).all() and (x<dims[0]).all() and (y>=0).all() and (y<dims[1]).all()):
             raise RuntimeError(f"Bad pixel id in {datapath}: x = {x.min()}:{x.max()} y = {y.min()}:{y.max()}")
 
         # BBM 2026-05-20: don't make relative timestamps here - that is a later step
-        times -= time_correction
+        times -= time_correction.astype(int)
 
-        events[name] = dict(dims=dims, ts=times, x=x, y=y)
+        result["dims"] = dims
+        result["x"].append(x)
+        result["y"].append(y)
+        result["ts"].append(times)
+        result["ts_sigma"].append(time_correction_sigma.astype(int))
+
+        # events[name] = dict(dims=dims, ts=times, ts_sigma=time_correction_sigma, x=x, y=y)
 
     # Treat the monitor as a detector named "monitor" so that we don't need
     # special handling during rebinning.
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
         events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
-    return dict(detectors=events)
+    
+    # combine events for all partitions (only one detector in nexus)
+    if result["dims"] is not None:
+        combined = dict(
+            dims=result["dims"],
+            ts=np.concatenate(result["ts"]) if result["ts"] else np.zeros(0, dtype='int64'),
+            ts_sigma=np.concatenate(result["ts_sigma"]) if result["ts_sigma"] else np.zeros(0, dtype='int64'),
+            x=np.concatenate(result["x"]) if result["x"] else np.zeros(0, dtype='int64'),
+            y=np.concatenate(result["y"]) if result["y"] else np.zeros(0, dtype='int64'),
+        )
+        events["multiDetector"] = combined
+    raw_events._cleaned_fields = events
+    return events

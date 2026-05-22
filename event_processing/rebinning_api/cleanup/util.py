@@ -36,7 +36,13 @@ def neutron_velocity(wavelength):
     return VELOCITY_FACTOR / wavelength
 
 def travel_time(distance, wavelength):
-    return 1e8 * distance / neutron_velocity(wavelength) # cm / (m/s) * 1e8 = ns
+    return 1e7 * distance / neutron_velocity(wavelength) # cm / (m/s) * 1e7 = ns
+
+# From Richard's calculations:
+hOverMn = 3956.034                      # tof = d*wavelength/hOverMn
+
+# assert(travel_time(distance=1.0, wavelength=6.0) == 1.0 * 6.0 / hOverMn), f"Warning, travel_time ({travel_time(1.0, 6.0)}) does not match Richard's calculation ({1.0 * 6.0 / hOverMn})"
+
 
 def get_partition(field_id: str):
     return field_id.split("_", 1)[1]

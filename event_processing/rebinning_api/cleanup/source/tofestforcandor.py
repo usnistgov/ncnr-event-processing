@@ -104,9 +104,9 @@ def ToFEstForCANDOR(
     if DetectorDim is None or len(DetectorDim) != 3:
         DetectorDim = [6.0, 30.0, 2.0]         # Detector [width, height, thickness] (mm)
     if Lsa is None:
-        Lsa = 3572.81                          # Sample to the HOPD in question (mm)
+        Lsa = 3572.81                          # Sample to the HOPG in question (mm)
     if Lad is None:
-        Lad = 18.100                           # HOPD to its accompanying detector (mm)
+        Lad = 18.100                           # HOPG to its accompanying detector (mm)
     if thetaA is None:
         thetaA = 63.1                          # specular angle for detector bank0 (deg)
     if nPoints == 0:
@@ -239,64 +239,55 @@ def ToFEstForCANDOR(
         f"$\\sigma$ (due to $\\Delta\\lambda$)  = {sigmaLambda*1000:{fmt2}} ms",
     ]
 
-    print("\n##################################################")
-    print("*** CANDOR ***")
-    print("##################################################")
-    for line in results:
-        print(line)
-    print("##################################################")
-
-    # ------------------------------------------------------------------
-    # If the user asked for no plot, simply return here
-    # ------------------------------------------------------------------
-    if noPlotFlag:
-        return Lsd, {"results": results, "moments": (mean_dist, var_dist),
-                     "sigmaLambda": sigmaLambda}
-
     # ------------------------------------------------------------------
     # Histogram the results to enable a plot of the distribution of distances and times
     # ------------------------------------------------------------------
+
     frequency, distances = histogram(Lsd, nbins=51)    # frequency = Histogram(Lsd, nbins=51, locations=distances)
     tof = distances * wavelength / hOverMn
 
-    # ---- Plot of distances ----------------------------------------------
-    plt.figure(figsize=(10, 6))
-    plt.plot(distances, frequency,
-             marker='d', linestyle=' ', color='red')
-    xtitle = r"L$_{samp-detector}$ (m)"
-    ytitle = "Intensity"
-    title  = f"CANDOR: S‑D Distances for $\\lambda$ = {wavelength:.2f} Å"
-    plt.xlabel(xtitle)
-    plt.ylabel(ytitle)
-    plt.title(title)
+    ## Show results:
+    if not noPlotFlag:
+        print("\n##################################################")
+        print("*** CANDOR ***")
+        print("##################################################")
+        for line in results:
+            print(line)
+        print("##################################################")
 
-    # Add the first three result strings (those that refer to distance)
-    for i, txt in enumerate(results[:3]):
-        plt.text(0.5, 0.7 - i*0.08, txt,
-                 transform=plt.gca().transAxes,
-                 fontfamily='Courier', fontsize=9,
-                 bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
-    plt.tight_layout()
-    plt.show()
+        # ---- Plot of distances ----------------------------------------------
+        plt.figure(figsize=(10, 6))
+        plt.plot(distances, frequency,
+                marker='d', linestyle=' ', color='red')
+        plt.xlabel(r"L$_{samp-detector}$ (m)")
+        plt.ylabel("Intensity")
+        plt.title(f"CANDOR: S‑D Distances for $\\lambda$ = {wavelength:.2f} Å")
 
-    # ---- Plot of TOF ----------------------------------------------------
-    plt.figure(figsize=(10, 6))
-    plt.plot(tof, frequency,
-             marker='d', linestyle=' ', color='red')
-    xtitle = r"TOF$_{samp-detector}$ (s)"
-    title  = f"CANDOR: S‑D TOF for $\\lambda$ = {wavelength:.2f} Å"
-    plt.xlabel(xtitle)
-    plt.ylabel(ytitle)
-    plt.title(title)
+        # Add the first three result strings (those that refer to distance)
+        for i, txt in enumerate(results[:3]):
+            plt.text(0.5, 0.7 - i*0.08, txt,
+                    transform=plt.gca().transAxes,
+                    fontfamily='Courier', fontsize=9,
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+        plt.tight_layout()
+        plt.show()
 
-    # Add the remaining result strings (those that refer to TOF)
-    for i, txt in enumerate(results[3:]):
-        plt.text(0.5, 0.7 - i*0.08, txt,
-                 transform=plt.gca().transAxes,
-                 fontfamily='Courier', fontsize=9,
-                 bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
-    plt.tight_layout()
-    plt.show()
+        # ---- Plot of TOF ----------------------------------------------------
+        plt.figure(figsize=(10, 6))
+        plt.plot(tof, frequency,
+                marker='d', linestyle=' ', color='red')
+        plt.xlabel(r"TOF$_{samp-detector}$ (s)")
+        plt.ylabel("Intensity")
+        plt.title(f"CANDOR: S‑D TOF for $\\lambda$ = {wavelength:.2f} Å")
+
+        # Add the remaining result strings (those that refer to TOF)
+        for i, txt in enumerate(results[3:]):
+            plt.text(0.5, 0.7 - i*0.08, txt,
+                    transform=plt.gca().transAxes,
+                    fontfamily='Courier', fontsize=9,
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+        plt.tight_layout()
+        plt.show()
 
     # ------------------------------------------------------------------
     # Return data that might be useful for other scripts
@@ -319,7 +310,7 @@ def ToFEstForCANDOR(
 # ----------------------------------------------------------------------
 # Driver procedure for the TOF Estimate – translates `drive_TofEstForCANDOR`
 # ----------------------------------------------------------------------
-def drive_TofEstForCANDOR(detector_index: int = 0, nPoints: int = 0, noPlotFlag: bool = False) -> None:
+def drive_TofEstForCANDOR(detector_index: int = 0, nPoints: int = 0, noPlotFlag: bool = False):
     """
     Load the CANDOR parameter file (wavelength and HOPG/detector distances)
     from a text file, pick the detector row indicated by ``detector_index``,
@@ -378,7 +369,7 @@ def drive_TofEstForCANDOR(detector_index: int = 0, nPoints: int = 0, noPlotFlag:
     # ------------------------------------------------------------------
     # Call the Monte‑Carlo routine with the selected row
     # ------------------------------------------------------------------
-    ToFEstForCANDOR(
+    return ToFEstForCANDOR(
         wavelength=lambda_arr[detector_index],
         DeltaLambda=DeltaLambda[detector_index],
         Lsa=Lsa_arr[detector_index],
@@ -386,6 +377,51 @@ def drive_TofEstForCANDOR(detector_index: int = 0, nPoints: int = 0, noPlotFlag:
         nPoints=nPoints,
         noPlotFlag=noPlotFlag,
     )
+
+
+def generate_table():
+    """
+    Generate a table of distances and times for all detectors in Bank0.
+    """
+    results = []
+    for i in range(54):
+        results.append(drive_TofEstForCANDOR(detector_index=i, nPoints=101, noPlotFlag=True))
+    return results
+
+
+def write_distance_table(filename: str = 'candor_distances.dat', nPoints: int = 101):
+    """
+    Write a table of detector index, mean distance, distance uncertainty (1-sigma),
+    and wavelength uncertainty (1-sigma) to a text file.
+
+    Parameters
+    ----------
+    filename : str
+        Output file name (will be created/overwritten).
+    nPoints : int
+        Number of Monte‑Carlo points per component passed to the TOF estimate.
+    """
+    script_dir = Path(__file__).parent
+    out_path = script_dir / filename
+
+    # Prepare lists for columns
+    indices = []
+    mean_dists = []      # metres
+    sigma_dists = []     # metres (1‑sigma uncertainty on mean distance)
+    sigma_wls = []       # Ångström (1‑sigma wavelength spread)
+
+    for det in range(54):  # detectors 0‑53
+        _, info = drive_TofEstForCANDOR(detector_index=det, nPoints=nPoints, noPlotFlag=True)
+        indices.append(det)
+        mean_dists.append(info['mean_distance'])               # m
+        sigma_dists.append(np.sqrt(info['variance_distance'])) # m
+        sigma_wls.append(info['DeltaLambda'])                  # Å
+
+    # Stack into a 2‑D array and save
+    data = np.column_stack((indices, mean_dists, sigma_dists, sigma_wls))
+    header = "index mean_distance_m sigma_distance_m sigma_wavelength_A"
+    np.savetxt(out_path, data, header=header, fmt='%d %.6f %.6f %.6f')
+    print(f"Distance table written to {out_path}")
 
 
 # ----------------------------------------------------------------------
