@@ -11,11 +11,11 @@ def extra_detector_distance(x: int | np.ndarray, y: int | np.ndarray):
     return 0.0
 
 def partition_to_detector(partition_name: str):
-    return "areaDetector"
+    return "detector"
 
 def to_detector_indices(pixel_ids: np.ndarray):
-    y = pixel_ids >> 16
-    x = pixel_ids & 0xFFFF
+    x = pixel_ids >> 16
+    y = pixel_ids & 0xFFFF
     return x, y
 
 def get_pixel_distances(entry):
@@ -122,7 +122,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
         x, y = to_detector_indices(pixel_ids)
         
-        base_distance = entry["instrument/detector/distance"] # cm
+        base_distance = entry["instrument/detector/distance"][0] # cm
         extra_distance = extra_detector_distance(x, y)
         distance = base_distance + extra_distance
 
@@ -131,10 +131,11 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         if not ((x>=0).all() and (x<dims[0]).all() and (y>=0).all() and (y<dims[1]).all()):
             raise RuntimeError(f"Bad pixel id in {datapath}: x = {x.min()}:{x.max()} y = {y.min()}:{y.max()}")
     
-        times -= start + time_correction
+        times -= time_correction.astype(int)
         events[name] = dict(dims=dims, ts=times, x=x, y=y)
 
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
         events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
+    raw_events._cleaned_fields = events
     return dict(detectors=events)
