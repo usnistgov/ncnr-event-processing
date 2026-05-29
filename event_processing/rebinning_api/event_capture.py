@@ -600,9 +600,12 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
 
     if "DAS_logs/counter/eventStartTime" not in entry:
         entry_start_time = parse_timestamp(entry['start_time'])
-        arm_time = entry_start_time + entry['DAS_logs/counter/startTime'][point] * 1000 # s -> ms
-        disarm_time = entry_start_time + entry['DAS_logs/counter/stopTime'][point] * 1000 # s -> ms
-        print(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {start_times}")
+        # TODO: remove this whole fallback... we should always have eventStartTime
+        arm_time = entry_start_time + (entry['DAS_logs/counter/startTime'][point] - 0.5) * 1000 # s -> ms to match parse_timestamp output
+        disarm_time = entry_start_time + (entry['DAS_logs/counter/stopTime'][point] + 0.5) * 1000 # s -> ms
+        arm_time = int(arm_time * 1e6) # ms -> ns
+        disarm_time = int(disarm_time * 1e6) # ms -> ns
+        print(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {entry_start_time}")
     else:
         arm_time = entry["DAS_logs/counter/eventStartTime"][point]
         disarm_time = entry["DAS_logs/counter/eventStopTime"][point]
@@ -659,7 +662,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
             # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
             # print("GATE_OFF", message, record)
             stop_times.append(record['timestamp'])
-        elif record['syncType'] == "T0":
+        elif record['syncType'] == "TO_SYNC":
             db.trigger(record['timestamp'])
         else:
             raise ValueError(f"Unknown trigger type {record['syncType']}")
