@@ -97,6 +97,7 @@ and for the client:
        print(message)
 """
 
+import os
 import sys
 import time
 from datetime import datetime
@@ -120,6 +121,13 @@ import kafka.structs
 # import avro.io
 import avroc
 import numpy as np
+
+if os.environ.get("USE_CONFLUENT", False):
+    from .confluent_connector import kafka_consumer, stream_history
+    logging.info("Using confluent-kafka connector")
+else:
+    from .kafka_python_connector import kafka_consumer, stream_history
+    logging.info("Using kafka-python connector")
 
 from . import nexus_util
 from . import data_cache
@@ -176,14 +184,6 @@ def numba_decoder_2(schema_id: int):
         }
     return decoder
 
-@contextmanager
-def kafka_consumer():
-    kafka_url = f'{REDPANDA_IP}:{REDPANDA_STREAM_PORT}'
-    consumer = KafkaConsumer(bootstrap_servers=kafka_url)
-    try:
-        yield consumer
-    finally:
-        consumer.close()
 
 class EventsManager:
     """
@@ -416,122 +416,6 @@ class OffsetAndTimestamp(kafka.structs.OffsetAndTimestamp):
     timestamp: int
     leader_epoch: Optional[int]
 
-def stream_history_old(consumer: KafkaConsumer, topic: str, start: int, stop: int, partitions: Optional[Iterable[int]] = None, timeout_ms: int = 100):
-    if partitions is None:
-        partitions = consumer.partitions_for_topic(topic)
-        if partitions is None: # vsans_device doesn't exist yet...
-            return
-    print(f"stream {topic} {partitions} in [{start}, {stop}]")
-    for pid in partitions:
-        partition_handle = TopicPartition(topic, pid)
-        consumer.assign([partition_handle])
-
-        if 0:
-            earliest_offset = consumer.beginning_offsets([partition_handle])[partition_handle]
-            latest_offset = consumer.end_offsets([partition_handle])[partition_handle]
-            print(f"partition[{pid}] offset {earliest_offset=} {latest_offset=}")
-            consumer.seek(partition_handle, earliest_offset)
-            batches = consumer.poll(timeout_ms=timeout_ms)
-            #print(batches)
-            #print("ok", batches[partition_handle][0].timestamp)
-            earliest_time = batches[partition_handle][0].timestamp if batches else -1
-            if latest_offset > earliest_offset:
-                consumer.seek(partition_handle, latest_offset-1)
-                batches = consumer.poll(timeout_ms=timeout_ms)
-                latest_time = batches[partition_handle][0].timestamp if batches else -1
-            else:
-                latest_time = earliest_time
-            print(f"partition[{pid}] {earliest_time=} {latest_time=}")
-
-        offsets: Dict[TopicPartition, OffsetAndTimestamp] = consumer.offsets_for_times({partition_handle: start})
-        #print(offsets, topic, partition_handle)
-        if offsets is None or offsets[partition_handle] is None:
-            logging.warn(f"{topic}[{start}] offset not found")
-            return
-        offset = offsets[partition_handle].offset
-        print(f"partition[{pid}] offset for {start} = {offset}")
-        consumer.seek(partition_handle, offset)
-        # Single partition so messages are guaranteed to be in timestamp order
-        #print("reading messages")
-        done = False
-        while not done:
-            batches = consumer.poll(timeout_ms=timeout_ms)
-            if not batches:
-                break
-            messages: List[ConsumerRecord] = batches[partition_handle]
-            #print("batch", len(messages), messages[0].timestamp, messages[-1].timestamp)
-            for message in messages:
-                #print("times", message.timestamp, stop)
-                if message.timestamp >= stop:
-                    done = True
-                    break
-                yield message
-
-def stream_history(consumer: KafkaConsumer, topic: str, start: int, stop: int, partitions: Optional[Iterable[int]] = None, timeout_ms: int = 10):
-    if partitions is None:
-        partitions = consumer.partitions_for_topic(topic)
-        if partitions is None:
-            return
-
-    print(f"stream {topic} {partitions} in [{start}, {stop}]")
-
-    # 1. Bulk-create handles for ALL partitions
-    tps = [TopicPartition(topic, pid) for pid in partitions]
-
-    # 2. BATCH ASSIGN & IMMEDIATELY PAUSE: Keep all pipes open but quiet
-    consumer.assign(tps)
-    consumer.pause(*tps)
-
-    try:
-        # 3. BATCH LOOKUP: Fetch all boundaries in exactly TWO network requests
-        timestamps_search = {tp: start for tp in tps}
-        all_start_offsets = consumer.offsets_for_times(timestamps_search)
-        all_end_offsets = consumer.end_offsets(tps)
-
-        for tp in tps:
-            if all_start_offsets is None or all_start_offsets.get(tp) is None:
-                logging.debug(f"{topic}[{tp.partition}] offset not found for timestamp {start}")
-                continue 
-
-            start_offset = all_start_offsets[tp].offset
-            end_offset = all_end_offsets[tp]
-
-            # If the partition has no data in this region, skip it safely
-            if start_offset >= end_offset:
-                continue
-
-            logging.debug(f"partition[{tp.partition}] streaming from offset {start_offset} to {end_offset}")
-
-            # 4. HOT SWITCH: Just resume and seek, no heavy assign() teardown required
-            consumer.resume(tp)
-            consumer.seek(tp, start_offset)
-
-            # 5. DETERMINISTIC SCAN: Run explicitly until our position hits the endpoint
-            while consumer.position(tp) < end_offset:
-                batches = consumer.poll(timeout_ms=timeout_ms)
-
-                if not batches or tp not in batches:
-                    continue
-
-                messages: List[ConsumerRecord] = batches[tp]
-                broken_by_time = False
-
-                for message in messages:
-                    if message.timestamp >= stop:
-                        broken_by_time = True
-                        break
-
-                    yield message
-
-                if broken_by_time:
-                    break
-
-            # 6. PAUSE AGAIN: Quiet this partition before moving to the next one
-            consumer.pause(tp)
-
-    finally:
-        consumer.assign([])
-
 def parse_timestamp(field):
     timestamp = field[0].decode('utf8')
     dt = datetime.fromisoformat(timestamp)
@@ -639,9 +523,6 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     stop_times = []
     #search_start, search_stop = arm_time, disarm_time
 
-    # TODO: remove this check when topics stabilize.
-    available_topics = consumer.topics()
-
     # Use the actual time range instead of searching from epoch
     search_start = arm_time // 1000000  # ns -> ms
     search_stop = disarm_time // 1000000  # ns -> ms
@@ -693,10 +574,6 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         for channel in ('monitor', 'detector'):
             topic = f"{instrument}_{channel}"
             total, n = 0, 0
-            # Check if the topic exists BEFORE calling stream_history
-            if topic not in available_topics:
-                print(f"Skipping {topic} - not found in broker")
-                continue
 
             t_start = time.perf_counter_ns()
             stream = stream_history(consumer, topic, start_ms, stop_ms, timeout_ms=timeout_ms)
