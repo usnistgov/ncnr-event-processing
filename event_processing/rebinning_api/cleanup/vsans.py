@@ -90,7 +90,12 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             raise ValueError(f"Unknown detector {name}, should be in FR FT FB FL MB MR ML MT R")
         #print(f"{k}:{name} {dims=} y:{y.min()}-{y.max():<3} x:{x.min()}-{x.max():<3}")
         if not ((y>=0).all() and (y<dims[1]).all() and (x>=0).all() and (x<dims[0]).all()):
-            raise RuntimeError(f"Bad pixel id in {datapath}")
+            # find bad pixels:
+            bad_x = np.where((x < 0) | (x >= dims[0]))[0]
+            bad_y = np.where((y < 0) | (y >= dims[1]))[0]
+            bad = np.union1d(bad_x, bad_y)
+            logging.error(f"Bad pixels in {detector_name}: x={x[bad]}, y={y[bad]}, pixel_ids={pixels[bad]}")
+            raise RuntimeError(f"Bad pixel id in {datapath} for detector {detector_name}")
         #print(f"times: {times.min()}:{times.max()} relative to {start}")
         #print(f"subtracting {start} from {times[0]} = {times[0]-start}")
 

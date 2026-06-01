@@ -1,5 +1,5 @@
+import logging
 from contextlib import contextmanager
-from dataclasses import dataclass
 from typing import Optional, Iterable
 import uuid
 
@@ -107,17 +107,21 @@ def stream_history(consumer: Consumer, topic: str, start: int, stop: int, partit
                 raise KafkaException(error)
 
         if msg.topic() != topic:
+            logging.error(f"Unexpected topic {msg.topic()}, expecting {topic}")
             continue
 
         pid = msg.partition()
         
         # If we already closed this partition, ignore any residual buffered messages
         if pid not in active_partitions:
+            logging.error(f"Unexpected message from closed partition {pid}")
             continue
 
         # --- SAFETY GATE 2: STALE OFFSET LEAKAGE ---
         # Discard messages fetched during previous data points
-        if msg.offset() < start_offsets[pid]:
+        msg_offset = msg.offset()
+        if msg_offset and (msg_offset < start_offsets[pid]):
+            logging.error(f"Stale offset {msg_offset} < {start_offsets[pid]}")
             continue
 
         msg_timestamp = msg.timestamp()[1]

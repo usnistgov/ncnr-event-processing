@@ -407,7 +407,14 @@ PROCESSOR = dict(
 
 def process_message(message: ConsumerRecord, db: EventsManager):
     if db is not None:
-        processor = PROCESSOR[message.topic.rsplit('_', 1)[-1]]
+        topic_suffix = message.topic.rsplit('_', 1)[-1]
+
+        # Safety gate: If the topic suffix is not handled (like 'sync'), ignore it safely
+        if topic_suffix not in PROCESSOR:
+            logging.error(f"Skipping unhandled topic processor suffix: {topic_suffix} for topic {message.topic}")
+            return
+
+        processor = PROCESSOR[topic_suffix]
         processor(message, db)
 
 
