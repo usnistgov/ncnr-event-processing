@@ -137,8 +137,11 @@ GATE_ON, GATE_OFF, TO_SYNC = "GATE_ON", "GATE_OFF", "TO_SYNC"
 DEFAULT_SCHEMA_VERSION = 1
 
 @lru_cache
-def get_decoder(id: int):
-    url = f"http://{REDPANDA_IP}:8081/schemas/ids/{id}"
+def get_decoder(schema_id: int):
+    if schema_id == 2:
+        return numba_decoder_2(schema_id)
+
+    url = f"http://{REDPANDA_IP}:8081/schemas/ids/{schema_id}"
     data = json.loads(urlopen(url).read())
     schema = data['schema']
     return avro_decoder(schema)
@@ -146,7 +149,7 @@ def get_decoder(id: int):
 def avro_decoder(schema):
     from types import SimpleNamespace
     reader = avroc.compile_decoder(json.loads(schema))
-    def decoder(message):
+    def decoder(message: ConsumerRecord):
         with BytesIO(message.value) as fd:
             return reader(fd)
             #return SimpleNamespace(**data) # doesn't work for nested structures
@@ -158,6 +161,20 @@ def fastavro_decoder(schema):
             return fastavro.read.schemaless_reader(fd, schema)
     return decoder
 
+def numba_decoder_2(schema_id: int):
+    """ valid for id == 2 """
+    from .decoders import parse_neutron_packet_2
+
+    assert schema_id == 2, f"numba_decoder only works for id == 2, not {schema_id}"
+    def decoder(message: ConsumerRecord):
+
+        raw_buffer = np.frombuffer(message.value, dtype=np.uint8)
+        timestamp, pixel_id = parse_neutron_packet_2(raw_buffer)
+        return {
+            "timestamp": message.timestamp,
+            "neutrons": [ {"timestamp": timestamp, "pixel_id": pixel_id} ]
+        }
+    return decoder
 
 @contextmanager
 def kafka_consumer():
@@ -255,43 +272,27 @@ class EventsManager:
         self._create_or_extend_timestamp('T0', (timestamp,))
 
     def device(self, name, timestamp, value):
-        self._create_or_extend_pairs(name, ((timestamp, value),), 'value', '<d')
+        self._create_or_extend_pairs(name, np.array([timestamp]), np.array([value]))
 
     def monitor(self, events):
         self._create_or_extend_timestamp('monitor', events)
 
-    def counts(self, name, neutrons):
+    def counts(self, name, timestamp: np.ndarray, value: np.ndarray):
         #print("recording counts", name)
-        self._create_or_extend_pairs(name, neutrons, 'pixel', '<i4')
+        self._create_or_extend_pairs(name, timestamp, value)
 
     def get_detectors(self):
         return dict((k, v) for k, v in self._fields.items() if k.startswith('detector_'))
 
     def _create_or_extend_timestamp(self, name, events):
-        #print(f"extend {name} timestamp", events)
         data = self._fields.setdefault(name, [])
         data.extend(events)
-        #timestamp, = zip(*events)
-        #timestamp = np.asarray(list(timestamp), '<i8')
-        #ts_name = f"{name}_time.raw"
-        #if ts_name not in self._fields:
-        #    self._fields[ts_name] = (self._root / ts_name).open('wb')
-        #self._fields[ts_name].write(timestamp.data)
 
-    def _create_or_extend_pairs(self, name, events, field, dtype):
+    def _create_or_extend_pairs(self, name, timestamp: np.ndarray, value: np.ndarray):
         #print("extend {name} pairs", events)
-        data = self._fields.setdefault(name, [])
-        data.extend(events)
-        #timestamp, values = zip(*events)
-        #timestamp = np.asarray(timestamp, '<i8')
-        #values = np.asarray(values, dtype)
-        #ts_name = f"{name}_time.raw"
-        #val_name = f"{name}_{field}.raw"
-        #if ts_name not in self._fields:
-        #    self._fields[ts_name] = (self._root / ts_name).open('wb')
-        #    self._fields[val_name] = (self._root / val_name).open('wb')
-        #self._fields[ts_name].write(timestamp.data)
-        #self._fields[val_name].write(values.data)
+        data = self._fields.setdefault(name, {"timestamp": [], "value": []})
+        data["timestamp"].extend(timestamp)
+        data["value"].extend(value)
 
 
 def event_cleanup(entry, raw_events, datapath=""):
@@ -363,9 +364,11 @@ def process_detector(message: ConsumerRecord, db: EventsManager):
     schema_id = get_schema_id(message, default=2)
     decoder = get_decoder(schema_id)
     record: dict = decoder(message)
-    neutrons = ((n['timestamp'], n['pixel_id']) for n in record['neutrons'])
+
+    timestamp = np.asarray([n['timestamp'] for n in record['neutrons']], dtype='int64')
+    pixel_id = np.asarray([n['pixel_id'] for n in record['neutrons']], dtype='int64')
     detector = f"detector_{message.partition}"
-    db.counts(detector, neutrons)
+    db.counts(detector, timestamp, pixel_id)
 
 def process_monitor(message, db: EventsManager):
     # monitor schema is neutron_detector-value schema (2)
@@ -668,8 +671,8 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
             raise ValueError(f"Unknown trigger type {record['syncType']}")
 
     if len(start_times) != len(stop_times):
-        raise RuntimeError(f"Gate mismatch: {len(start_times)} GATE_ON, {len(stop_times)} GATE_OFF found in [{arm_time}-{disarm_time}]")
-    
+        warnings.warn(f"Gate mismatch: {len(start_times)} GATE_ON, {len(stop_times)} GATE_OFF found in [{arm_time}-{disarm_time}]")
+
     if not start_times:
         #no gate_on found, use arm_time
         logging.warning(f"no GATE_ON found, using arm_time={arm_time}")

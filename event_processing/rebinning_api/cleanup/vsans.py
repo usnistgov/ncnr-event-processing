@@ -60,8 +60,12 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         #print(f"detector_{name}->{DAS.name} {dims=}")
         key = f"detector_{k}"
         if key in raw_events._fields:
-            columns = list(zip(*raw_events._fields[key]))
-            times, pixels = np.asarray(columns[0]), np.asarray(columns[1])
+            event_pairs = raw_events._fields[key]
+            list_of_timestamp_arrays: list[np.ndarray] = event_pairs["timestamp"]
+            list_of_pixel_id_arrays: list[np.ndarray] = event_pairs["value"]
+            # Concatenate the arrays into single arrays
+            times = np.concatenate(list_of_timestamp_arrays)
+            pixels = np.concatenate(list_of_pixel_id_arrays)
         else:
             times, pixels = np.zeros(0, dtype='int64'), np.zeros(0, dtype='int64')
         x, y = pixels >> 16, pixels & 0xFFFF

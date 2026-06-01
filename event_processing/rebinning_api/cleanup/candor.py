@@ -66,7 +66,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     if make_table:
         print(f"    # Table data extracted from {datapath}")
         print(f"    # det  yrange   events =? integrated")
-    for k, (name, values) in enumerate(detector_partitions.items()):
+    for k, (name, event_pairs) in enumerate(detector_partitions.items()):
         partition = get_partition(name)
         detector_name = partition_to_detector(partition)
         nxdetector = entry.get(f"instrument/{detector_name}", None)
@@ -76,8 +76,11 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         DAS = entry[nxdetector["data"].attrs['target']].parent
         dims = tuple(DAS['dimension'][()])
 
-        columns = list(zip(*values))
-        times, pixel_ids = np.asarray(columns[0]), np.asarray(columns[1])
+        list_of_timestamp_arrays: list[np.ndarray] = event_pairs["timestamp"]
+        list_of_pixel_id_arrays: list[np.ndarray] = event_pairs["value"]
+        # Concatenate the arrays into single arrays
+        times = np.concatenate(list_of_timestamp_arrays)
+        pixel_ids = np.concatenate(list_of_pixel_id_arrays)
 
         # key = f"detector_{k}"
         # if key in raw_events._fields:
