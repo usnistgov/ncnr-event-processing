@@ -25,8 +25,12 @@ class ConsumerRecordCompatibility:
         self.partition = msg.partition()
         self.offset = msg.offset()
         # msg.timestamp() returns a tuple: (timestamp_type, timestamp_in_ms)
-        self.timestamp = msg.timestamp()[1] 
-        self.headers = msg.headers()
+        self.timestamp = msg.timestamp()[1]
+        raw_headers = msg.headers()
+        if raw_headers is not None:
+            self.headers = [(k.decode('utf-8') if isinstance(k, bytes) else k, v) for k, v in raw_headers]
+        else:
+            self.headers = None
 
 @contextmanager
 def kafka_consumer():
@@ -50,7 +54,7 @@ def stream_history(consumer: Consumer, topic: str, start: int, stop: int, partit
     from all target partitions concurrently.
     """
     # Fetch metadata using confluent-kafka syntax
-    metadata = consumer.list_topics(topic, timeout=5.0)
+    metadata = consumer.list_topics(timeout=5.0)
     if topic not in metadata.topics:
         return
 
@@ -70,39 +74,61 @@ def stream_history(consumer: Consumer, topic: str, start: int, stop: int, partit
     if not valid_assignments:
         return
 
-    # 2. Assign and seek dynamically
+    start_offsets = {tp.partition: tp.offset for tp in valid_assignments}
+
+    # Assign all valid partitions ONCE. Never call assign() again in this loop.
     consumer.assign(valid_assignments)
 
-    # 3. Stream until time limits are hit or partitions report EOF naturally
-    active_partitions = len(valid_assignments)
+    # 3. THE CRITICAL FIX: Explicitly seek to force the C-queue to flush 
+    # and ignore any previously cached offsets from older loops!
+    for tp in valid_assignments:
+        consumer.seek(tp)
+
+    # Use a set to track which partitions are still actively within our time window
+    active_partitions = {tp.partition for tp in valid_assignments}
     
-    while active_partitions > 0:
-        # poll() reads from the pre-fetched background native C++ queue (blazing fast)
+    while active_partitions:
         msg = consumer.poll(timeout=float(timeout_ms) / 1000.0)
-        
+
         if msg is None:
             continue
+            
         error = msg.error()
         if error is not None:
-            # C++ engine informs us when a partition runs out of data natively!
+            # When C++ hits the end of a partition naturally
             if error.code() == KafkaError._PARTITION_EOF:
-                active_partitions -= 1
+                pid = msg.partition()
+                if pid in active_partitions:
+                    active_partitions.remove(pid)
+                    # Pause the partition to save network I/O, preserving its state
+                    consumer.pause([TopicPartition(topic, pid)])
                 continue
             else:
-                raise KafkaException(msg.error())
+                raise KafkaException(error)
 
-        # Enforce temporal window restrictions
-        msg_timestamp = msg.timestamp()[1]
-        if msg_timestamp >= stop:
-            # If this partition goes past the stop time, quiet it
-            current_assignments = consumer.assignment()
-            updated_assignments = [tp for tp in current_assignments if tp.partition != msg.partition()]
-            consumer.assign(updated_assignments)
-            active_partitions -= 1
+        if msg.topic() != topic:
             continue
 
-        # Yield wrapped compatible format to feed Downstream processors safely
+        pid = msg.partition()
+        
+        # If we already closed this partition, ignore any residual buffered messages
+        if pid not in active_partitions:
+            continue
+
+        # --- SAFETY GATE 2: STALE OFFSET LEAKAGE ---
+        # Discard messages fetched during previous data points
+        if msg.offset() < start_offsets[pid]:
+            continue
+
+        msg_timestamp = msg.timestamp()[1]
+        
+        # When a partition crosses the time threshold
+        if msg_timestamp >= stop:
+            active_partitions.remove(pid)
+            consumer.pause([TopicPartition(topic, pid)])
+            continue
+
         yield ConsumerRecordCompatibility(msg)
 
-    # Teardown assignment cleanly
+    # Teardown cleanly at the very end
     consumer.assign([])
