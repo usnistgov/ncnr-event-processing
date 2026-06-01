@@ -125,17 +125,16 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
         x, y = to_detector_indices(pixel_ids)
         
-        base_distance = entry["instrument/detector/distance"][0] # cm
-        extra_distance = extra_detector_distance(x, y)
-        distance = base_distance + extra_distance
+        distance = get_pixel_distances(entry)
 
         time_correction = travel_time(distance, wavelength)
+        time_correction_sigma = (time_correction * wavelength_spread / wavelength).astype(int)
 
         if not ((x>=0).all() and (x<dims[0]).all() and (y>=0).all() and (y<dims[1]).all()):
             raise RuntimeError(f"Bad pixel id in {datapath}: x = {x.min()}:{x.max()} y = {y.min()}:{y.max()}")
     
         times -= time_correction.astype(int)
-        events[name] = dict(dims=dims, ts=times, x=x, y=y)
+        events[name] = dict(dims=dims, ts=times, ts_sigma=time_correction_sigma, x=x, y=y)
 
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
