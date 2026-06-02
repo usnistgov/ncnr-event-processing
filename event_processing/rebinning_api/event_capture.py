@@ -105,7 +105,7 @@ from pathlib import Path
 from io import BytesIO
 import logging
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, TypedDict
 import uuid
 from contextlib import contextmanager
 from functools import lru_cache
@@ -185,6 +185,14 @@ def numba_decoder_2(schema_id: int):
     return decoder
 
 
+class CleanedEvents(TypedDict):
+    ts: np.ndarray # timestamps, ns
+    ts_sigma: np.ndarray # uncertainty in timestamps, ns
+    x: np.ndarray # x pixel index
+    y: np.ndarray # y pixel index
+    dims: tuple[int,int] # (nrows, ncols) for the detector
+
+
 class EventsManager:
     """
 
@@ -228,7 +236,7 @@ class EventsManager:
     #     "ts_sigma": <ndarray int64 uncertainty on timestamp>,
     #     "x": <ndarray int>,
     #     "y": <ndarray int> }}
-    _cleaned_fields: dict[str, Any]
+    _cleaned_fields: dict[str, CleanedEvents] # detector_name -> events
  
     def __init__(self, path, mode='w'):
         """

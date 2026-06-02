@@ -7,7 +7,7 @@ import typing
 from .util import travel_time, get_partition, neutron_velocity
 
 if typing.TYPE_CHECKING:
-    from ..event_capture import EventsManager
+    from ..event_capture import EventsManager, CleanedEvents
 
 DEBUG = False
 NUM_DETECTORS = 54
@@ -62,7 +62,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         "ts_sigma": [],
     }
 
-    events = {}
+    events: dict[str, "CleanedEvents"] = {}
     if make_table:
         print(f"    # Table data extracted from {datapath}")
         print(f"    # det  yrange   events =? integrated")
@@ -117,7 +117,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     # special handling during rebinning.
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
-        events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
+        events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), ts_sigma=np.zeros_like(monitors), x=np.array([0]), y=np.array([0]))
     
     # combine events for all partitions (only one detector in nexus)
     if result["dims"] is not None:

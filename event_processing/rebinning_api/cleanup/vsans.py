@@ -4,7 +4,7 @@ import typing
 
 from .util import travel_time, get_partition, neutron_velocity
 if typing.TYPE_CHECKING:
-    from ..event_capture import EventsManager
+    from ..event_capture import EventsManager, CleanedEvents
 
 def extra_detector_distance(x: int | np.ndarray, y: int | np.ndarray):
     # TODO: add actual pixel-by-pixel additional distance?
@@ -40,7 +40,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     #print(f"{wavelength=} {wavelength_spread=}")
     # detectors = list("FR FT FB FL MB MR ML MT R".split())
 
-    events = {}
+    events: dict[str, "CleanedEvents"] = {}
     if make_table:
         print(f"    # Table data extracted from {datapath}")
         print(f"    # det  yrange   events =? integrated")
@@ -100,8 +100,8 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         #print(f"subtracting {start} from {times[0]} = {times[0]-start}")
 
         times -= time_correction.astype(int)
-
-        result = dict(dims=dims, ts=times, ts_sigma=time_correction_sigma.astype(int), x=x, y=y)
+        ts_sigma = np.ones(len(times), dtype='int64') * time_correction_sigma.astype(int)
+        result = dict(dims=dims, ts=times, ts_sigma=ts_sigma, x=x, y=y)
         events[detector_name] = result
 
     # Treat the monitor as a detector named "monitor" so that we don't need
