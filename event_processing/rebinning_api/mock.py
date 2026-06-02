@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import time
 import uuid
 import numpy as np
@@ -21,7 +22,7 @@ def encode_varint(value: int) -> bytes:
             out.append(towrite | 0x80)
     return bytes(out)
 
-def generate_mock_avro_packet(num_events: int) -> bytes:
+def generate_mock_avro_neutrons_packet(num_events: int) -> bytes:
     """Generates a raw binary Avro packet matching your schema format."""
     packet = bytearray()
     
@@ -40,3 +41,19 @@ def generate_mock_avro_packet(num_events: int) -> bytes:
     # 3. Array End Marker (0 elements block)
     packet.extend(encode_varint(0))
     return bytes(packet)
+
+
+@dataclass
+class MockMessage:
+    value: bytes
+    headers: list[tuple[str, bytes]]
+    timestamp: int
+
+def generate_mock_kafka_neutrons_message(num_events: int = 100_000):
+    """Generates a Kafka message with a mock Avro payload."""
+    # Generate a mock Avro packet
+    avro_payload = generate_mock_avro_neutrons_packet(num_events)  # 10 events
+
+    # Create Kafka message with headers
+    message = MockMessage(value=avro_payload, headers=[("v", b"\x02")], timestamp=int(time.time() * 1000))
+    return message
