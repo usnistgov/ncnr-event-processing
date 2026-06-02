@@ -144,14 +144,17 @@ GATE_ON, GATE_OFF, TO_SYNC = "GATE_ON", "GATE_OFF", "TO_SYNC"
 
 DEFAULT_SCHEMA_VERSION = 1
 
+def get_schema(schema_id: int):
+    url = f"http://{REDPANDA_IP}:8081/schemas/ids/{schema_id}"
+    data = json.loads(urlopen(url).read())
+    return data['schema']
+
 @lru_cache
 def get_decoder(schema_id: int):
     if schema_id == 2:
         return numba_decoder_2(schema_id)
 
-    url = f"http://{REDPANDA_IP}:8081/schemas/ids/{schema_id}"
-    data = json.loads(urlopen(url).read())
-    schema = data['schema']
+    schema = get_schema(schema_id)
     return avro_decoder(schema)
 
 def avro_decoder(schema):
