@@ -60,10 +60,10 @@ def _bin_by_time(events, edges):
         #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
         ##print(edges[:5], edges[-5:])
         #print(edges)
-        ny, nx = dims
+        nx, ny = dims
         index = np.searchsorted(edges, ts)
-        data = np.zeros((nbins+2, ny, nx), 'int32')
-        np.add.at(data, (index, y, x), 1)
+        data = np.zeros((nbins+2, nx, ny), 'int32')
+        np.add.at(data, (index, x, y), 1)
         binned_detectors[name] = data[1:-1, :, :]
         print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
     result['detectors'] = binned_detectors
