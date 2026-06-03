@@ -125,7 +125,8 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
         x, y = to_detector_indices(pixel_ids)
         
-        distance = get_pixel_distances(entry)
+        distance_map = get_pixel_distances(entry)
+        distance = distance_map[x,y]
 
         time_correction = travel_time(distance, wavelength)
         time_correction_sigma = (time_correction * wavelength_spread / wavelength).astype(int)
