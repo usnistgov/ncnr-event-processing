@@ -103,7 +103,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     detector_partitions = raw_events.get_detectors()
 
 
-    events = {}
+    events = raw_events._fields.copy()
     if make_table:
         print(f"    # Table data extracted from {datapath}")
         print(f"    # det  yrange   events =? integrated")
