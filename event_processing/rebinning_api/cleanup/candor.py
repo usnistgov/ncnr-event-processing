@@ -49,7 +49,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     proposal = entry["DAS_logs/experiment/proposalId"][0]
     filename = entry["DAS_logs/trajectoryData/fileName"][0]
     # TODO: need to associated redpanda detector number with nexus detector field
-    start = raw_events.start
+    start = raw_events.start[0]
     wavelength_calibration = entry["DAS_logs/detectorTable/wavelengths"][:]
     wavelength_spread = entry["DAS_logs/detectorTable/wavelengthSpreads"][:]
     detector_partitions = raw_events.get_detectors()
@@ -62,7 +62,8 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         "ts_sigma": [],
     }
 
-    events: dict[str, "CleanedEvents"] = {}
+    events = raw_events._fields.copy()
+    detectors = events.setdefault('detectors', {})
     if make_table:
         print(f"    # Table data extracted from {datapath}")
         print(f"    # det  yrange   events =? integrated")
@@ -103,7 +104,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             raise RuntimeError(f"Bad pixel id in {datapath}: x = {x.min()}:{x.max()} y = {y.min()}:{y.max()}")
 
         # BBM 2026-05-20: don't make relative timestamps here - that is a later step
-        times -= time_correction.astype(int)
+        times -= start + time_correction.astype(int)
 
         result["dims"] = dims
         result["x"].append(x)
@@ -117,7 +118,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     # special handling during rebinning.
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
-        events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), ts_sigma=np.zeros_like(monitors), x=np.array([0]), y=np.array([0]))
+        detectors['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), ts_sigma=np.zeros_like(monitors), x=np.array([0]), y=np.array([0]))
     
     # combine events for all partitions (only one detector in nexus)
     if result["dims"] is not None:
@@ -128,6 +129,6 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             x=np.concatenate(result["x"]) if result["x"] else np.zeros(0, dtype='int64'),
             y=np.concatenate(result["y"]) if result["y"] else np.zeros(0, dtype='int64'),
         )
-        events["multiDetector"] = combined
+        detectors["multiDetector"] = combined
     raw_events._cleaned_fields = events
     return events
