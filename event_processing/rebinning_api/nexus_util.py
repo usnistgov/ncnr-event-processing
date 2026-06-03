@@ -111,24 +111,34 @@ def hdf_copy(source, target, replacement):
 def _hdf_copy_internal(root, h5file, replacement):
     # type: (h5py.Group, h5py.Group, List[Tuple[str, str]]) -> None
     links = []
-    # print(">>> group copy", root.name, "\n   ", "\n    ".join(sorted(root.keys())))
+    
     for item_name, item in sorted(root.items()):
         item_path = f"{root.name}/{item_name}" if root.name != "/" else f"/{item_name}"
-        #print("joining", root.name, item_name, "as", item_path)
-        #item_path = posixpath.join(root.name, item_name)
+        
+        # 1. Handle NeXus logical hard links
         if 'target' in item.attrs and item.attrs['target'] != item_path:
-            # print("linking", item_path, item.name)
             links.append((item_path, item.attrs['target']))
+            
+        # 2. Handle Datasets
         elif hasattr(item, 'dtype'):
-            data = replacement.get(item_path, item[()])
-            # print("copying", item_path, item.name)
-            node = h5file.create_dataset(item.name, data=data, compression=4)
-            attrs = dict(item.attrs)
-            node.attrs.update(item.attrs)
+            if item_path in replacement:
+                # Modifying this specific dataset
+                data = replacement[item_path]
+                node = h5file.create_dataset(item.name, data=data, compression=4)
+                
+                # Copy attributes
+                for k, v in item.attrs.items():
+                    node.attrs[k] = v
+            else:
+                # FAST PATH: C-level binary copy for unmodified datasets
+                # Bypasses reading into memory (item[()]) and re-compressing
+                root.copy(item, h5file, name=item.name)
+                
+        # 3. Handle Groups
         else:
-            # print("making", item_path, item.name)
-            # Hope that it is a group...
             node = h5file.create_group(item.name)
-            node.attrs.update(item.attrs)
+            for k, v in item.attrs.items():
+                node.attrs[k] = v
             links.extend(_hdf_copy_internal(item, h5file, replacement))
+            
     return links
