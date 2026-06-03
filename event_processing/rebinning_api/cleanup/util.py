@@ -36,6 +36,16 @@ def neutron_velocity(wavelength):
     return VELOCITY_FACTOR / wavelength
 
 def travel_time(distance, wavelength):
+    """
+    Compute travel time.
+
+    Args:
+        distance (float): Distance in cm.
+        wavelength (float): Wavelength in Angstroms.
+
+    Returns:
+        float: Time in nanoseconds.
+    """
     return 1e7 * distance / neutron_velocity(wavelength) # cm / (m/s) * 1e7 = ns
 
 # From Richard's calculations:
