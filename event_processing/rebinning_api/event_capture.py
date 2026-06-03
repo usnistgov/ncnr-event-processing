@@ -153,6 +153,7 @@ def get_schema(schema_id: int):
 def get_decoder(schema_id: int):
     if schema_id == 2:
         return numba_decoder_2(schema_id)
+        # return pyruhvro_decoder(schema_id)
 
     schema = get_schema(schema_id)
     return avro_decoder(schema)
@@ -170,6 +171,23 @@ def fastavro_decoder(schema):
     def decoder(message):
         with BytesIO(message.value) as fd:
             return fastavro.read.schemaless_reader(fd, schema)
+    return decoder
+
+def pyruhvro_decoder(schema_id):
+    from pyruhvro import deserialize_array
+
+    schema = get_schema(schema_id)
+
+    def decoder(message):
+        batches = deserialize_array([message.value], schema)
+        arrow_array = batches[0]
+        struct_array = arrow_array.flatten()
+        timestamps = struct_array.field("timestamp").to_numpy()
+        pixel_ids = struct_array.field("pixel_id").to_numpy()
+        return {
+            "timestamp": message.timestamp,
+            "neutrons": [ {"timestamp": timestamps, "pixel_id": pixel_ids } ]
+        }
     return decoder
 
 def numba_decoder_2(schema_id: int):
@@ -253,6 +271,8 @@ class EventsManager:
         #    path.mkdir(exist_ok=True, parents=True)
         #self._root = path
         self._fields = {}
+        self._cleaned_fields = {}
+
 
     def flush(self):
         #for name, fp in self._fields.items():
@@ -487,7 +507,8 @@ def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
 
 def fetch_events_to_memory(entry, point, timeout_ms=100):
     with kafka_consumer() as consumer:
-        return _fetch_events_for_point(consumer, entry, point, timeout_ms)
+        db = _fetch_events_for_point(consumer, entry, point, timeout_ms)
+        return db
 
 def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     """
