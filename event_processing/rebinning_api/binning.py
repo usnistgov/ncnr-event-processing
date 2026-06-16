@@ -46,7 +46,6 @@ def _bin_by_time(events, edges):
     # TODO: check the last edge is the correct length when it is truncated
     # TODO: duration is incorrect with masking and/or incomplete bins
 
-    nbins = len(edges) - 1
     edges = np.asarray(edges*1e9, 'int64')
     result = {}
     result['mode'] = 'time'
@@ -57,14 +56,7 @@ def _bin_by_time(events, edges):
     binned_detectors = {}
     for name, detector in detectors.items():
         dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']
-        #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
-        ##print(edges[:5], edges[-5:])
-        #print(edges)
-        nx, ny = dims
-        index = np.searchsorted(edges, ts)
-        data = np.zeros((nbins+2, nx, ny), 'int32')
-        np.add.at(data, (index, x, y), 1)
-        binned_detectors[name] = data[1:-1, :, :]
+        binned_detectors[name] = hist(dims=dims, edges=edges, ts=ts, y=y, x=x)
         print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
     result['detectors'] = binned_detectors
     result['count_time'] = np.diff(edges)*1e-9
@@ -106,6 +98,148 @@ def _bin_by_time(events, edges):
 
     return result
 
+def _hist_torch_addat(dims, edges, ts, y, x):
+    import torch
+    from torch.nn.functional import pad
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # include two extra bins for the timestamps that fall outside the defined bins
+    # (those with indices 0 and n_bins + 1); for an array of size n+1 searchsorted
+    # returns insertion indices from 0 (below the left edge) to n+1 (past the right edge)
+    # To get the indexing to work right for values outside the range, need an
+    # extra zero for the left edge.
+    n_bins = len(edges) - 1
+    ny, nx = dims
+    edges = torch.from_numpy(np.asarray(edges, np.int64)).to(device=device)
+    ts_edges = pad(edges, (1, 0), "constant", -2**63)
+    ts = torch.from_numpy(ts.view(dtype=np.int64)).to(device=device)
+    time_index = torch.searchsorted(ts_edges, ts, side='right').to(dtype=torch.int32, device=device)
+    x = torch.from_numpy(x).to(dtype=torch.int32, device=device)
+    y = torch.from_numpy(y).to(dtype=torch.int32, device=device)
+    # Note: uses (int64 * ny + int?)*nx + int? which promotes to int64.
+    # Rewriting as int64*ny*nx + int?*nx + int? may lose digits on y if it is int8 or int16.
+    bin_index = ((time_index - 1)*ny + y)*nx + x # !!!! careful about type promotion !!!!
+    source = torch.ones_like(bin_index)
+    binned = torch.zeros((n_bins + 2)*ny*nx, dtype=torch.int32, device=device)
+    #print("rebin_torch_index_add", time_index.dtype, tubeID.dtype, pixel.dtype, source.dtype, source.shape, bin_index.dtype, bin_index.shape)
+    binned.index_add_(0, bin_index, source)
+    binned = binned.reshape((n_bins+2, ny, nx))
+    #print(f"events={len(ts)} binned={binned.sum()} trimmed={binned[1:-1].sum()}")
+
+    #print(f"R:{binned[1:-1, 0:48].sum()} T:{binned[1:-1, 48:96].sum()}  B:{binned[1:-1, 96:144].sum()}  L:{binned[1:-1, 144:192].sum()}")
+    # throw away the data in the outside bins
+    binned = binned[1:-1].cpu().numpy()
+    #print(f"trimmed={binned.sum()}")
+
+    # returns: detectors data, and bin edges in seconds
+    return binned
+
+# Alternate implementations, in case we don't have torch available.
+def _hist_numpy(dims, edges, ts, y, x):
+    ny, nx = dims
+    n_bins = len(edges) - 1
+    # include two extra bins for the timestamps that fall outside the defined bins
+    # (those with indices 0 and n_bins + 1); for an array of size n+1 searchsorted
+    # returns insertion indices from 0 (below the left edge) to n+1 (past the right edge)
+    binned = np.zeros((n_bins + 2, ny, nx))
+    # the operation below can be repeated... streaming histograms!
+    time_index = np.searchsorted(edges, ts, side='left')
+    np.add.at(binned, (time_index, ny, nx), 1)
+    # throw away the data in the outside bins
+    binned = binned[1:-1]
+    return binned
+
+def _hist_torch_histogramdd(dims, edges, ts, y, x):
+    import torch
+
+    ny, nx = dims
+    bins = (
+        torch.from_numpy(ts.astype('float64')),
+        torch.arange(ny+1, dtype=torch.float64),
+        torch.arange(nx+1, dtype=torch.float64),
+    )
+    ts = torch.from_numpy(ts(dtype=np.int64)).to(torch.float64)
+    y = torch.from_numpy(y).to(torch.float64)
+    x = torch.from_numpy(x).to(torch.float64)
+    data = torch.stack((ts, y, x), dim=1)
+    #print("rebin_torch", ts.shape, data.shape, data.dtype, [v.dtype for v in bins])
+    binned, edges = torch.histogramdd(data, bins=bins)
+    binned = binned[1:-1].numpy()
+    return binned
+
+def _hist_numba(dims, edges, ts, y, x):
+    ny, nx = dims
+    n_bins = len(edges) - 1
+    bins = np.zeros((n_bins, ny, nx), dtype='int32')
+    index = np.argsort(ts)
+    edges = np.asarray(edges, 'int64')
+    ts = np.asarray(ts, 'int64')
+    y = np.asarray(y, 'int32')
+    x = np.asarray(x, 'int32')
+    #binned = np.zeros((edges.size-1, 192, 128), dtype='int32')
+    binned = _numba_binning(bins, edges, ts, y, x, index)
+    return binned
+
+# TODO: parallel algorithm
+# After sorting (in parallel since the indices are already partially sorted?),
+# partition the indices to the various processors, then for each process skip
+# to the next edge. If still within the partition, then process until the next
+# edge after the end of its partition, otherwise exit. There should be no read
+# contention even though multiple processors may be reading data in the overlap
+# region. There will be no write contention because every process is working
+# in its own time slices.
+try:
+    from numba import njit
+    HAVE_NUMBA = True
+except ImportError:
+    HAVE_NUMBA = False
+    def njit(*args, **kw):
+        return lambda x: x
+@njit('void(int32[:,:,:], int64[:], int64[:], int32[:], int32[:], int64[:])', cache=True)
+def _numba_binning(bins, edges, ts, y, x, index):
+    # Skip leading elements outside the histogram range
+    next_edge = edges[0]
+    j = 0
+    while j < bins.size:
+        ev = index[j]
+        if ts[ev] >= next_edge:
+            break
+        j += 1
+
+    # Build the histogram
+    i = 0
+    next_edge = edges[i+1]
+    while j < ts.size:
+        ev = index[j]
+        if ts[ev] >= next_edge:
+            i += 1
+            if i == edges.size - 1:
+                # Past the final edge, so we are done
+                break
+            next_edge = edges[i+1]
+        else:
+            bins[i, y[ev], x[ev]] += 1
+            j += 1
+
+    # Past the final edge or no more events so done
+    return
+
+# TODO: not sure why this is here
+def force_numba_compile():
+    edges = np.arange(2, dtype='uint64')
+    tubeID = np.zeros(0, dtype='uint8')
+    pixel = np.zeros(0, dtype='uint8')
+    times = np.zeros(0, dtype='uint64')
+    index = np.zeros(0, dtype='int64')
+    _numba_binning(edges, tubeID, pixel, times, index)
+#force_numba_compile()
+
+# TODO: make a histogrammming backend selector
+#hist = _hist_torch_addat
+#hist = _hist_torch_histogramdd
+#hist = _hist_numpy
+hist = _hist_numba if HAVE_NUMBA else _hist_numpy
 
 def _bin_strobed(events, edges):
     # TODO: does not support masking
