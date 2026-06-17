@@ -98,7 +98,7 @@ def hist_type(nexus_file):
     Using this estimate, both the forward and reverse values can be corrected
     to the physical positions then histogrammed and merged together.
 
-    For a sweep of magnetic field through a hysterisis loop the forward
+    For a sweep of magnetic field through a hysteresis loop the forward
     and reversed cannot be merged. Both current and sweep direction will need
     to be stored with each point.
 
@@ -130,7 +130,7 @@ def hist_type(nexus_file):
     time dimension to the detector and monitor and update all the analysis
     software to support it.
 
-    E.g., reflectivity at each point in a hysterisis loop
+    E.g., reflectivity at each point in a hysteresis loop
 
     nexus: common
     user: bin edges

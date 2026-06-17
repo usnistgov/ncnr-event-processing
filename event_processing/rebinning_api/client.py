@@ -98,13 +98,13 @@ def time_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=
     return bins
 
 def strobe_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=0,
-        hysterisis=False, trigger_override=None):
+        hysteresis=False, trigger_override=None):
     edges = _lin_edges(metadata.trigger_interval, start, end, interval)
-    bins = models.StrobeBins(edges=edges, mask=mask, hysterisis=hysterisis, trigger_override=trigger_override)
+    bins = models.StrobeBins(edges=edges, mask=mask, hysteresis=hysteresis, trigger_override=trigger_override)
     return bins
 
 def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
-        hysterisis=False):
+        hysteresis=False):
     if metadata.sweep is None:
         raise TypeError("Cannot do sweep binning when not sweeping a motor")
     device = metadata.sweep.device
@@ -113,11 +113,11 @@ def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
     if stop is None:
         stop = metadata.sweep.stop
     edges = np.linspace(start, stop, nbins+1)
-    bins = models.DeviceBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
+    bins = models.DeviceBins(edges=edges, mask=mask, hysteresis=hysteresis, device=device)
     return bins
 
 def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
-        hysterisis=False):
+        hysteresis=False):
     if device not in metadata.logs:
         raise TypeError(f"Cannot bin against {device} when values are not tracked")
     if start is None:
@@ -134,7 +134,7 @@ def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=Non
             edges = edges[:-1]
     else:
         raise TypeError("Must specify one of interval or nbins for edges")
-    bins = models.SweepBins(edges=edges, mask=mask, hysterisis=hysterisis, device=device)
+    bins = models.SweepBins(edges=edges, mask=mask, hysteresis=hysteresis, device=device)
     return bins
 
 def _lin_edges(duration, start, end, interval=None, nbins=None) -> models.vector:

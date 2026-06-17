@@ -90,7 +90,7 @@ class StrobeBins(BaseModel):
     mask: TimeMask | None
     #: True if odd numbered triggers should be binned separately from
     #: even numbered triggers. Even/odd is preserved even through masking.
-    hysterisis: bool
+    hysteresis: bool
     #: If provided, use alternate trigger values for T0
     triggers: vector | None
     #: Name of the binning class
@@ -103,7 +103,7 @@ class DeviceBins(BaseModel):
     edges: vector
     mask: TimeMask | None
     #: True if rising values binned separately from falling values
-    hysterisis: bool
+    hysteresis: bool
     #: Name of the binning class
     mode: str = "device"
 

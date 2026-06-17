@@ -16,7 +16,7 @@ def bin(entry, point, bins:models.Bins, events):
     elif bins.mode == "strobe":
         result = _bin_strobed(events, bins.edges)
     elif bins.mode == "device":
-        result = _bin_by_device(events, bins.edges, bins.device, hysterisis=bins.hysterisis)
+        result = _bin_by_device(events, bins.edges, bins.device, hysteresis=bins.hysteresis)
     else:
         raise KeyError(f"Unrecognized bin mode {bins.mode}")
 
@@ -454,7 +454,7 @@ def _merge_edges(ts1, idx1, up1, ts2, idx2, up2):
     return [np.array(v) for v in zip(*pairs)]
 
 
-def _bin_by_device(events, edges, name, hysterisis=True):
+def _bin_by_device(events, edges, name, hysteresis=True):
     bin_ts, bin_index, bin_up = _find_device_edges(events, edges, name)
 
     # Limit to start/end of the measurement
