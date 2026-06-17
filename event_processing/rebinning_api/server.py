@@ -384,7 +384,7 @@ def check(verbose=False):
     r_many = get_timebin_frame_range(index, index+2, request)
     detector = "detector_FL"
     if verbose: print(r_one.data[detector].shape, r_many.data[detector].shape)
-    assert (r_one.data[detector][...,0] == r_many.data[detector][..., 0]).all()
+    assert (r_one.data[detector][0] == r_many.data[detector][0]).all()
     hdf = get_timebin_nexus(request)
     with open('/tmp/sample.hdf', 'wb') as fd:
         fd.write(base64.b64decode(hdf.base64_data))

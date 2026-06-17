@@ -120,6 +120,7 @@ class VSANSEvents(object):
 
         dims = (NUM_TUBE, NUM_PIXEL)
         binned = hist(dims, edges, self.ts, self.tubeID, self.pixel)
+        # print(f"{dims=} {edges.shape=} {self.ts.shape=} {self.tubeID.shape=} {self.pixel.shape=} {binned.shape=}")
         detectors = {
             "right": binned[:, 0:48, ::-1].copy(),
             "left": binned[:, 192:144:-1, :].copy(),
