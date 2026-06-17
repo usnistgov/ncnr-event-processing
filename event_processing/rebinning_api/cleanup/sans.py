@@ -104,6 +104,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
 
     events = raw_events._fields.copy()
+    detectors = events.setdefault('detectors', {})
     if make_table:
         print(f"    # Table data extracted from {datapath}")
         print(f"    # det  yrange   events =? integrated")
@@ -135,10 +136,10 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             raise RuntimeError(f"Bad pixel id in {datapath}: x = {x.min()}:{x.max()} y = {y.min()}:{y.max()}")
     
         times -= time_correction.astype(int)
-        events[name] = dict(dims=dims, ts=times, ts_sigma=time_correction_sigma, x=x, y=y)
+        detectors[name] = dict(dims=dims, ts=times, ts_sigma=time_correction_sigma, x=x, y=y)
 
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
-        events['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
+        detectors['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
     raw_events._cleaned_fields = events
-    return dict(detectors=events)
+    return events
