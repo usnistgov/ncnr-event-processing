@@ -15,6 +15,7 @@ from fastapi import FastAPI, Form
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 #from dateutil.parser import isoparser
 import numpy as np
@@ -36,6 +37,12 @@ DOWNLOAD_HISTORY_SIZE = 10000 # number of downloads to keep track of
 app = FastAPI()
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
 # app.add_middleware(MessagePackMiddleware)
+
+# Mount the static files directory
+current_path = Path(__file__).parent
+static_path = current_path.parent / "rebinning_client" / "web-client" / "dist"
+app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
+
 
 origins = [
     "*",
@@ -82,6 +89,7 @@ def make_dummy_response():
     detectors = dict([(str(i), NumpyArray.from_ndarray(np.random.rand(points, *s))) for i, s in enumerate(detector_shapes)])
     devices = {"A3": NumpyArray.from_ndarray(np.arange(points, dtype="<i4"))}
     return RebinnedData(detectors=detectors, devices=devices)
+
 
 @app.post("/rebin")
 @app.get("/rebin")
@@ -240,7 +248,7 @@ async def download_nexus_form(request_str: Annotated[str, Form()], download_id: 
         raise e
 
 
-def get_nexus(measurement, bins):
+def get_nexus(measurement: models.Measurement, bins):
     """
     Helper for nexus writer endpoints, which takes the binned detectors, etc.
     and produces an updated nexus file.
@@ -260,7 +268,7 @@ def get_nexus(measurement, bins):
     return data
 
 
-def bin_events(measurement, bins, summary=False):
+def bin_events(measurement: models.Measurement, bins, summary=False):
     from timeit import default_timer as tic; T0 = tic()
     if bins.mode != "time":
         raise NotImplementedError("only time-mode binning implemented for now")
@@ -268,7 +276,7 @@ def bin_events(measurement, bins, summary=False):
     key = (request_key(measurement), request_key(bins))
     #print("Key:", key)
     # Increment version number if the data changes
-    raw_events_key = (key[0], "raw", "v1")  # events keyed by entry, not bin spec
+    # raw_events_key = (key[0], "raw", "v1")  # events keyed by entry, not bin spec
     events_key = (key[0], "events", "v1")
     binned_key = (*key, "binned", "v1")   # binning keyed by both entry and bin spec
     summed_key = (*key, "summed", "v1")
@@ -281,33 +289,29 @@ def bin_events(measurement, bins, summary=False):
                 result = _bin_by_time_old_vsans(entry, bins)
             else:
                 # TODO: drop raw events cache once we have event_cleanup working for everything
-                if raw_events_key not in CACHE:
-                    print(f"{tic()-T0:.1f}: fetching raw events for {entry.file.filename}")
-                    event_capture.setup()  # in case it hasn't already been setup for sim
-                    raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
-                    print(f"{tic()-T0:.1f}: caching raw events to", raw_events_key)
-                    CACHE[raw_events_key] = raw_events
                 if events_key not in CACHE:
-                    print(f"{tic()-T0:.1f}: correcting events")
-                    raw_events = CACHE[raw_events_key]
+                    print(f"{tic()-T0:.6f}: fetching raw events for {entry.file.filename}")
+                    # event_capture.setup()  # in case it hasn't already been setup for sim
+                    raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
+                    print(f"{tic()-T0:.6f}: correcting events")
+                    event_capture.event_cleanup(entry, raw_events)
                     #print(raw_events.__dict__)
-                    #raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
-                    events = event_capture.event_cleanup(entry, raw_events)
+                    events = raw_events._cleaned_fields
                     #print(events)
                     CACHE[events_key] = events
                 events = CACHE[events_key]
-                print(f"{tic()-T0:.1f}: binning")
+                print(f"{tic()-T0:.6f}: binning")
                 result = binning.bin(entry, measurement.point, bins, events)
-                print(f"{tic()-T0:.1f}: binned")
+                print(f"{tic()-T0:.6f}: binned")
                 #binned = _bin_by_time(entry, events, bins)
         finally:
             entry.file.close()
         CACHE[binned_key] = result
-        print(f"{tic()-T0:.1f}: cached")
+        print(f"{tic()-T0:.6f}: cached")
 
     if not summary:
         result = CACHE[binned_key]
-        print(f"{tic()-T0:.1f}: retrieved bins")
+        print(f"{tic()-T0:.6f}: retrieved bins")
         return result
 
     if summed_key not in CACHE:
@@ -366,10 +370,11 @@ def request_key(request):
 
 # TODO: how do we clear the cache when upgrading the application?
 
-def check(verbose=False):
+def check(filename=None, verbose=False):
     from . import client
 
-    filename = "sans68869.nxs.ngv"
+    if filename is None:
+        filename = "sans68869.nxs.ngv"
     measurement = models.Measurement(filename=filename)
     metadata = get_metadata(measurement)
     if verbose: print("metadata", metadata)
@@ -384,7 +389,7 @@ def check(verbose=False):
     r_many = get_timebin_frame_range(index, index+2, request)
     detector = "detector_FL"
     if verbose: print(r_one.data[detector].shape, r_many.data[detector].shape)
-    assert (r_one.data[detector][...,0] == r_many.data[detector][..., 0]).all()
+    assert (r_one.data[detector][0] == r_many.data[detector][0]).all()
     hdf = get_timebin_nexus(request)
     with open('/tmp/sample.hdf', 'wb') as fd:
         fd.write(base64.b64decode(hdf.base64_data))
@@ -392,15 +397,17 @@ def check(verbose=False):
 def check2():
     path = "vsans/202102/27861/data"
     nexusfile = "sans72109.nxs.ngv"
-    event_capture.setup()
+    # event_capture.setup()
     with event_capture.kafka_consumer() as consumer:
         event_capture.fetch_events_for_file(consumer, nexusfile, datapath=path)
 
 def check3():
     from . import client
-    event_capture.setup()
-    path = "vsans/202102/27861/data"
-    nexusfile = "sans72110.nxs.ngv"
+    # event_capture.setup()
+    # path = "vsans/202102/27861/data"
+    # nexusfile = "sans72110.nxs.ngv"
+    path = "vsans/202102/nonims6/data"
+    nexusfile = "sans72222.nxs.ngv"
     measurement = models.Measurement(filename=nexusfile, path=path, point=0)
     metadata = get_metadata(measurement)
     bins = client.time_linbins(metadata, interval=501)
@@ -411,33 +418,144 @@ def check3():
 
 # TODO: cache a version number, clearing the cache if there is a version mismatch
 usage = """
-Usage: server clear|check
+Usage: server [clear|check|check2|check3] [-f FILENAME]
 
 clear: Empties any caches associated with the data. This should happen
     automatically if you bump server.CACHE_VERSION to a new value, but you
     may still want to clear the version manually when e.g., testing speed.
 check: Runs some simple event processing to make sure that the pieces
     work together. This is a development tool acting as a poor substitute
-    for a proper test harness.
+    for a proper test harness. Optionally specify a filename with -f.
+check2: Runs check2 (see function).
+check3: Runs check3 (see function).
 
 To run the actual server for responding to web requests use uvicorn:
 
     uvicorn event_processing.rebinning_api.server:app
- """
+"""
+
+def cli_rebin(filename: str, path: str, interval: int, preview: bool = False):
+    """Handles the CLI execution for rebinning or launching the preview."""
+    if preview:
+        import webbrowser
+        # Launch the Vue application. Ensure your frontend server port matches!
+        url = f"http://localhost:8080/?filename={filename}&path={path}"
+        print(f"Opening preview in browser: {url}")
+        webbrowser.open(url)
+        return
+
+    # Headless execution
+    from . import client
+    print(f"Loading measurement for {filename}...")
+    measurement = models.Measurement(filename=filename, path=path, point=0)
+    
+    print("Fetching metadata...")
+    metadata = get_metadata(measurement)
+    
+    print(f"Generating bins with interval {interval}...")
+    bins = client.time_linbins(metadata, interval=interval)
+    request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
+    
+    print("Processing events and generating Nexus file (this may take a moment)...")
+    hdf = get_timebin_nexus(request)
+    
+    # Save the file
+    out_filename = f"{Path(filename).stem}_rebinned{Path(filename).suffix}"
+    with open(out_filename, 'wb') as fd:
+        fd.write(base64.b64decode(hdf.base64_data))
+        
+    print(f"Success! Rebinned file saved to ./{out_filename}")
 
 def main():
-    import sys
-    # TODO: admit early that we need an options parser
-    if "clear" in sys.argv[1:]:
+    import argparse
+    parser = argparse.ArgumentParser(description='Event processing server and CLI utilities.')
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # --- Command: serve ---
+    parser_serve = subparsers.add_parser('serve', help='Start the FastAPI backend server.')
+    parser_serve.add_argument('--host', type=str, default='127.0.0.1', help='Host IP address to bind to.')
+    parser_serve.add_argument('--port', type=int, default=8000, help='Port to bind to (default: 8000).')
+    parser_serve.add_argument('--reload', action='store_true', help='Enable auto-reload for development.')
+    parser_serve.add_argument('--filename', type=str, help='Filename to pre-load in the GUI on startup.')
+    parser_serve.add_argument('--path', type=str, default='', help='Path to the data directory.')
+    parser_serve.add_argument('--preview', action='store_true', help='Open the GUI in the browser once the server starts.')
+
+    # --- Command: clear ---
+    subparsers.add_parser('clear', help='Empties any caches associated with the data.')
+
+    # --- Command: check / check2 / check3 ---
+    parser_check = subparsers.add_parser('check', help='Run diagnostic checks.')
+    parser_check.add_argument('-f', '--filename', help='Filename to use for check command')
+    subparsers.add_parser('check2', help='Run check2 diagnostic.')
+    subparsers.add_parser('check3', help='Run check3 diagnostic.')
+
+    # --- Command: rebin ---
+    parser_rebin = subparsers.add_parser('rebin', help='Rebin a file directly from the CLI.')
+    parser_rebin.add_argument('filename', type=str, help='Name of the nexus file (e.g., sans72222.nxs.ngv)')
+    parser_rebin.add_argument('--path', type=str, default='', help='Path to the data directory')
+    parser_rebin.add_argument('--interval', type=int, default=500, help='Bin interval (default: 500)')
+    parser_rebin.add_argument('--preview', action='store_true', help='Open the file in the GUI browser instead of processing locally')
+
+    args = parser.parse_args()
+
+    if args.command == "serve":
+        import uvicorn
+        import webbrowser
+        import threading
+        import urllib.request
+        import urllib.error
+        import time
+
+        print(f"args: {args}")
+        if args.preview:
+            def wait_and_open():
+                # Now that FastAPI serves the frontend, we use its port!
+                base_url = f"http://{args.host}:{args.port}"
+                
+                # Append query parameters if a file was specified
+                if args.filename:
+                    target_url = f"{base_url}/?filename={args.filename}&path={args.path}"
+                else:
+                    target_url = base_url
+
+                print(f"Waiting for server to become ready at {base_url} ...")
+                
+                # Poll the server until it responds
+                while True:
+                    try:
+                        # Attempt to connect to the server
+                        urllib.request.urlopen(base_url)
+                        break # If we get here, the server is up!
+                    except urllib.error.URLError:
+                        # Connection refused; sleep for a quarter-second and try again
+                        print(f"Server not ready yet... retrying in 250ms")
+                        time.sleep(0.25)
+                
+                print(f"Server is up! Opening browser: {target_url}")
+                webbrowser.open(target_url)
+            
+            # Start the polling thread
+            threading.Thread(target=wait_and_open, daemon=True).start()
+
+        print(f"Starting API and Web server on http://{args.host}:{args.port} ...")
+        uvicorn.run("event_processing.rebinning_api.server:app", host=args.host, port=args.port, reload=args.reload)
+        
+    elif args.command == "clear":
         CACHE.clear()
-    elif "check" in sys.argv[1:]:
-        check()
-    elif "check2" in sys.argv[1:]:
+        print("Cache cleared.")
+    elif args.command == "check":
+        if args.filename:
+            check(args.filename)
+        else:
+            check()
+    elif args.command == "check2":
         check2()
-    elif "check3" in sys.argv[1:]:
+    elif args.command == "check3":
         check3()
+    elif args.command == "rebin":
+        cli_rebin(args.filename, args.path, args.interval, args.preview)
     else:
-        print(usage)
+        parser.print_help()
 
 if __name__ == "__main__":
     main()
