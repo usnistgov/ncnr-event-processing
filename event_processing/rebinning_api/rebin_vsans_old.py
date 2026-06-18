@@ -119,7 +119,7 @@ class VSANSEvents(object):
             edges = np.linspace(self.ts.min(), self.ts.max(), time_slices+1)
             #raise NotImplementedError("time slices must be a vector")
 
-        dims = (NUM_TUBE, NUM_PIXEL)
+        dims = (NUM_PIXEL, NUM_TUBE)
         binned = hist(dims, edges, self.ts, self.tubeID, self.pixel)
         # print(f"{dims=} {edges.shape=} {self.ts.shape=} {self.tubeID.shape=} {self.pixel.shape=} {binned.shape=}")
         detectors = {

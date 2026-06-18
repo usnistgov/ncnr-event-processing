@@ -121,7 +121,7 @@ def _hist_torch_addat(dims, edges, ts, y, x):
     # To get the indexing to work right for values outside the range, need an
     # extra zero for the left edge.
     n_bins = len(edges) - 1
-    ny, nx = dims
+    nx, ny = dims
     edges = torch.from_numpy(np.asarray(edges, np.int64)).to(device=device)
     ts_edges = pad(edges, (1, 0), "constant", -2**63)
     ts = torch.from_numpy(ts.view(dtype=np.int64)).to(device=device)
@@ -154,7 +154,7 @@ def _hist_torch_dd(dims, edges, ts, y, x):
     # histogramdd is inclusive on the rightmost edge, so need to go one bin further
     edges = np.append(edges, edges[-1]+1)
 
-    ny, nx = dims
+    nx, ny = dims
     bins = (
         torch.from_numpy(edges.astype('float64')).to(device=device),
         torch.arange(ny+1, dtype=torch.float64, device=device),
@@ -171,7 +171,7 @@ def _hist_torch_dd(dims, edges, ts, y, x):
     return np.asarray(binned, dtype='int32')
 
 def _hist_numpy(dims, edges, ts, y, x):
-    ny, nx = dims
+    nx, ny = dims
     n_bins = len(edges) - 1
     # include two extra bins for the timestamps that fall outside the defined bins
     # (those with indices 0 and n_bins + 1); for an array of size n+1 searchsorted
@@ -204,7 +204,7 @@ def _hist_numpy_dd(dims, edges, ts, y, x):
     return np.asarray(binned, dtype='int32')
 
 def _hist_numba(dims, edges, ts, y, x):
-    ny, nx = dims
+    nx, ny = dims
     n_bins = len(edges) - 1
     index = np.argsort(ts)
     edges = np.asarray(edges, 'int64')
@@ -325,7 +325,7 @@ def _bin_strobed(events, edges):
         #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
         ##print(edges[:5], edges[-5:])
         #print(edges)
-        ny, nx = dims
+        nx, ny = dims
         index = np.searchsorted(edges, ts-triggers)
         data = np.zeros((ny, nx, nbins+2), 'int32')
         np.add.at(data, (y, x, index), 1)
@@ -479,7 +479,7 @@ def _bin_by_device(events, edges, name, hysteresis=True):
         #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
         ##print(edges[:5], edges[-5:])
         #print(edges)
-        ny, nx = dims
+        nx, ny = dims
         value = np.interp(ts, device_ts, device_value)
         index = np.searchsorted(edges, value)
         if directional:
