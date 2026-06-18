@@ -16,7 +16,7 @@
     "@types/plotly.js": "^2.29.0",
     "bootstrap": "^5.3.3",
     "plotly-interactors": "github:bmaranville/plotly-interactors",
-    "plotly.js-dist": "^2.29.0",
+    "plotly.js-basic-dist": "^3.6.0",
     "uuid": "^9.0.1",
     "vue": "3.4.15"
   },

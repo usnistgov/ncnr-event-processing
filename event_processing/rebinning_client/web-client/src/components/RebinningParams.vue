@@ -55,7 +55,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, shallowRef, watchEffect } from 'vue';
-import { react } from 'plotly.js-dist';
+import { react } from 'plotly.js-basic-dist';
 import { xSliceInteractor } from 'plotly-interactors';
 import { api_get, api_post, rebinning_api, metadata, metadata_request, selected_filename, selected_path, rebin_limits } from '@/store';
 import { NumpyArray, NestedArray } from '@/numpy_array';
