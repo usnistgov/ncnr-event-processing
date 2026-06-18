@@ -115,17 +115,18 @@ class VSANSEvents(object):
         if hasattr(time_slices, 'size'):
             # then it's an array, treat as bin edges in seconds:
             edges = time_slices / TIMESTAMP_RESOLUTION
-        else:
-            raise NotImplementedError("time slices must be a vector")
+        elif np.isscalar(time_slices):
+            edges = np.linspace(self.ts.min(), self.ts.max(), time_slices+1)
+            #raise NotImplementedError("time slices must be a vector")
 
         dims = (NUM_TUBE, NUM_PIXEL)
         binned = hist(dims, edges, self.ts, self.tubeID, self.pixel)
         # print(f"{dims=} {edges.shape=} {self.ts.shape=} {self.tubeID.shape=} {self.pixel.shape=} {binned.shape=}")
         detectors = {
-            "right": binned[:, 0:48, ::-1].copy(),
-            "left": binned[:, 192:144:-1, :].copy(),
-            "top": binned[:, 48:96, :].swapaxes(1,2).copy(),
-            "bottom": binned[:, 144:96:-1, ::-1].swapaxes(1,2).copy(),
+            "right": binned[:, 0:48, ::-1].swapaxes(1,2).copy(),
+            "left": binned[:, 192:144:-1, :].swapaxes(1,2).copy(),
+            "top": binned[:, 48:96, :].copy(),
+            "bottom": binned[:, 144:96:-1, ::-1].copy(),
         }
 
         # returns: detectors data, and bin edges in seconds
@@ -161,11 +162,28 @@ def demo():
     for position in [0, 1]:
         detectors, edges = events[position].rebin(100)
         for name, data in detectors.items():
-            integrated = np.sum(data, axis=0)
-            integrated = np.sum(integrated, axis=0)
+            integrated = np.sum(data, axis=-1)
+            integrated = np.sum(integrated, axis=-1)
             #print(name, 'sum:', integrated, integrated.shape)
             plt.plot(edges[:-1], integrated, label=f"{name}-{position}")
     plt.legend()
+
+    if 1:
+        # Shared (vmin, vmax) for colormap
+        vmin = min(d.min() for d in detectors.values())
+        vmax = max(d.max() for d in detectors.values())
+        frame = 5
+        plt.figure()
+        plt.subplot(121)
+        plt.pcolor(detectors["right"][frame], vmin=vmin, vmax=vmax)
+        nf, ny, nx = detectors["left"].shape
+        plt.pcolor(np.arange(-nx, 1), np.arange(ny+1), detectors["left"][frame], vmin=vmin, vmax=vmax)
+        plt.axis('equal')
+        plt.subplot(122)
+        plt.pcolor(detectors["top"][frame], vmin=vmin, vmax=vmax)
+        nf, ny, nx = detectors["bottom"].shape
+        plt.pcolor(np.arange(nx+1), np.arange(-ny, 1), detectors["bottom"][frame], vmin=vmin, vmax=vmax)
+        plt.axis('equal')
 
     if 0:
         times, counts0 = events[0].counts_vs_time(timestep=1.0)
