@@ -46,16 +46,16 @@
       </form>
       <iframe name="hiddenFrame" width="0" height="0" style="display:none;"></iframe>
     </div>
-    <div class="row" v-show="shown_summary == selected_filename">
-      <div class="col" ref="summary_plot_div"></div>
-      <div class="col" ref="frame_plot_div"></div>
+    <div class="row" style="min-height: 450px;">
+      <div class="col-6" ref="summary_plot_div"></div>
+      <div class="col-6" ref="frame_plot_div"></div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, shallowRef, watchEffect } from 'vue';
-import { react } from 'plotly.js-basic-dist';
+import { react, Plots } from 'plotly.js-cartesian-dist';
 import { xSliceInteractor } from 'plotly-interactors';
 import { api_get, api_post, rebinning_api, metadata, metadata_request, selected_filename, selected_path, rebin_limits } from '@/store';
 import { NumpyArray, NestedArray } from '@/numpy_array';
@@ -272,7 +272,8 @@ async function update_summary() {
   summary_fig.layout.xaxis.range = [display_x_min, display_x_max];
   summary_fig.layout.xaxis.autorangeoptions = {maxallowed: display_x_max, minallowed: display_x_min};
 
-  react(summary_plot_div.value, summary_fig.data, summary_fig.layout, summary_fig.config);
+  await react(summary_plot_div.value, summary_fig.data, summary_fig.layout, summary_fig.config);
+  await Plots.resize(summary_plot_div.value);
 }
 
 async function fetch_and_draw_frame({ det_name, point_number }: { det_name: string, point_number: number }) {
@@ -292,7 +293,8 @@ async function fetch_and_draw_frame({ det_name, point_number }: { det_name: stri
   const frame_fig = structuredClone(frame_fig_template);
   frame_fig.data = [trace];
   frame_fig.layout.title =  `Frame ${det_name}: ${start_time.toFixed(4)} < time < ${end_time.toFixed(4)} (s)`;
-  react(frame_plot_div.value, frame_fig.data, frame_fig.layout, frame_fig.config);
+  await react(frame_plot_div.value, frame_fig.data, frame_fig.layout, frame_fig.config);
+  await Plots.resize(frame_plot_div.value);
 }
 
 const draw_loop = setupDrawLoop(fetch_and_draw_frame, 'draw frame');
