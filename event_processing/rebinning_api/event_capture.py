@@ -207,12 +207,22 @@ def numba_decoder_2(schema_id: int):
 
 
 class CleanedEvents(TypedDict):
-    ts: np.ndarray # timestamps, ns
-    ts_sigma: np.ndarray # uncertainty in timestamps, ns
-    x: np.ndarray # x pixel index
-    y: np.ndarray # y pixel index
-    dims: tuple[int,int] # (nrows, ncols) for the detector
+    """
+    Generic 2D detector event after translation from detector specific pixel id.
 
+    For the physical location of the pixel use *{x,y}_pixel_{size,offset}* from
+    the corresponding NXdetector group in the NeXus file.
+    """
+    ts: np.ndarray
+    """timestamps (int64 ns)"""
+    ts_sigma: np.ndarray
+    """uncertainty in timestamps (ns)"""
+    x: np.ndarray
+    """pixel row index, not the x-position on the 2D detector image (int32)"""
+    y: np.ndarray
+    """pixel column index, not the y-position on the 2D detector image (int32)"""
+    dims: tuple[int,int]
+    """detector grid size (nx, ny) = (nrows,ncolumns)"""
 
 class EventsManager:
     """
