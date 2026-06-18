@@ -16,6 +16,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 #from dateutil.parser import isoparser
 import numpy as np
@@ -41,7 +42,7 @@ app = FastAPI()
 # Mount the static files directory
 current_path = Path(__file__).parent
 static_path = current_path.parent / "rebinning_client" / "web-client" / "dist"
-app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
+app.mount("/static", StaticFiles(directory=static_path, html=True), name="frontend")
 
 
 origins = [
@@ -56,6 +57,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# dist_path = Path(__file__).resolve().parents[1] / "rebinning_client" / "web-client" / "dist"
+
+# # Mount the directory so that any request that doesn't match an API route
+# # falls back to the static files (index.html, JS, CSS, assets, …)
+# app.mount("/static/", StaticFiles(directory=str(dist_path), html=True), name="frontend")
 
 def disk_cache():
     import diskcache
@@ -510,7 +517,7 @@ def main():
         if args.preview:
             def wait_and_open():
                 # Now that FastAPI serves the frontend, we use its port!
-                base_url = f"http://{args.host}:{args.port}"
+                base_url = f"http://{args.host}:{args.port}/static"
                 
                 # Append query parameters if a file was specified
                 if args.filename:

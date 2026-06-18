@@ -1,45 +1,61 @@
 <template>
-  <q-page class="row column col">
-    <q-tabs
-      class="row"
-      v-model="active_tab"
-      dense
-      >
-      <q-tab name="experiment_search" label="Select Experiment" key="experiment_search"></q-tab>
-      <q-tab name="datafile_search" label="Select File" key="datafile_search"></q-tab>
-      <q-tab name="rebinning_params" label="Rebinning Params" key="rebinning_params"></q-tab>
-    </q-tabs>
-    <q-separator/>
-    <div class="row q-px-lg items-center flex-1">
-      <q-input class="q-px-md" v-model="selected_experiment" readonly label="Experiment ID"></q-input>
-      <q-input class="q-px-md" v-model="selected_filename" readonly label="Filename"></q-input>
-      <q-input class="q-px-md" v-model="selected_path" readonly label="File Path" :input-style="{width:'20em'}"></q-input>
-      <q-input class="q-px-md" v-model="metadata.duration" readonly label="Duration"></q-input>
-      <!-- <q-btn v-if="selected_filename && selected_path" style="height: 1em;" color="positive" label="Show Summary" />
-      <q-btn v-if="selected_filename && selected_path" style="height: 1em;" class="q-mx-md" color="secondary" label="Rebin + Download" /> -->
+  <div class="container-fluid">
+    <!-- Nav tabs -->
+    <ul class="nav nav-tabs mb-3">
+      <li class="nav-item">
+        <a class="nav-link" :class="{ active: active_tab === 'experiment_search' }" href="#" @click.prevent="active_tab = 'experiment_search'">Select Experiment</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" :class="{ active: active_tab === 'datafile_search' }" href="#" @click.prevent="active_tab = 'datafile_search'">Select File</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" :class="{ active: active_tab === 'rebinning_params' }" href="#" @click.prevent="active_tab = 'rebinning_params'">Rebinning Params</a>
+      </li>
+    </ul>
+
+    <hr class="my-3" />
+
+    <div class="row gx-3 align-items-center mb-3">
+      <div class="col">
+        <label class="form-label">Experiment ID</label>
+        <input class="form-control" v-model="selected_experiment" readonly />
+      </div>
+      <div class="col">
+        <label class="form-label">Filename</label>
+        <input class="form-control" v-model="selected_filename" readonly />
+      </div>
+      <div class="col" style="max-width: 20em;">
+        <label class="form-label">File Path</label>
+        <input class="form-control" v-model="selected_path" readonly />
+      </div>
+      <div class="col">
+        <label class="form-label">Duration</label>
+        <input class="form-control" v-model="metadata.duration" readonly />
+      </div>
     </div>
-    <!-- <q-separator/> -->
-    <q-tab-panels v-model="active_tab" class="column col q-py-sm " animated keep-alive>
-      <q-tab-panel class="column col q-px-md" name="experiment_search" key="experiment_search">
-          <experiments-table />
-      </q-tab-panel>
-      <q-tab-panel class="column col q-px-md" name="datafile_search" key="datafile_search">
-        <datafiles-table />
-      </q-tab-panel>
-      <q-tab-panel class="column col q-px-md" name="rebinning_params" key="rebinning_params">
-        <rebinning-params class="column col"/>
-      </q-tab-panel>
-    </q-tab-panels>
-  </q-page>
+
+    <!-- Tab panels -->
+    <div v-show="active_tab === 'experiment_search'" class="mb-3">
+      <experiments-table />
+    </div>
+    <div v-show="active_tab === 'datafile_search'" class="mb-3">
+      <datafiles-table />
+    </div>
+    <div v-show="active_tab === 'rebinning_params'" class="mb-3">
+      <keep-alive>
+        <rebinning-params class="d-flex flex-column" />
+      </keep-alive>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
 // import ExampleComponent from 'components/ExampleComponent.vue';
-import ExperimentsTable from 'components/ExperimentsTable.vue';
-import DatafilesTable from 'src/components/DatafilesTable.vue';
-import RebinningParams from 'src/components/RebinningParams.vue';
+import ExperimentsTable from '@/components/ExperimentsTable.vue';
+import DatafilesTable from '@/components/DatafilesTable.vue';
+import RebinningParams from '@/components/RebinningParams.vue';
 
-import { selected_experiment, selected_filename, selected_path, metadata, active_tab } from 'src/store';
+import { selected_experiment, selected_filename, selected_path, metadata, active_tab } from '@/store';
 
 </script>
 

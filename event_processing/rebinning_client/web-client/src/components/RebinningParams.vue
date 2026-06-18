@@ -1,74 +1,54 @@
 <template>
-  <div class="col column q-px-md">
-    <div class="row flex items-center">
-      <q-input
-        class="q-mx-md"
-        v-model.number="num_bins"
-        type="number"
-        label="Num. Bins"
-        :disable="!use_num"
-        @keydown.enter="update_summary"
-      />
-      <q-btn-toggle
-        v-model="use_num"
-        push
-        toggle-color="primary"
-        :options="[
-          {label: 'Num.', value: true},
-          {label: 'Width', value: false},
-        ]"
-      />
-      <q-input
-        class="q-mx-md"
-        v-model.number="bin_width"
-        type="number"
-        label="Bin Width"
-        :disable="use_num"
-        @keydown.enter="update_summary"
-      />
-      <q-input
-        class="q-mx-md"
-        v-model.number="rebin_limits.x1"
-        type="number"
-        label="Start"
-      />
-      <q-input
-        class="q-mx-md"
-        v-model.number="rebin_limits.x2"
-        type="number"
-        label="End"
-      />
-      <q-btn label="Reset start + end" color="primary" @click="reset_start_end"></q-btn>
-    </div>
-    <div class="row justify-center">
-      <q-btn :disabled="fetching_summary" v-if="selected_filename && selected_path" style="height: 1em;" color="positive" @click="update_summary">
-        <div class="row items-center no-wrap">
-          <div class="text-center">
-            Show Summary
-          </div>
-          <q-spinner size="1em" color="white" v-if="fetching_summary"></q-spinner>
-        </div>
-      </q-btn>
-      <q-btn :disabled="downloading" v-if="selected_filename && selected_path" style="height: 1em;" class="q-mx-md" color="secondary" @click="download_rebinned" >
-        <div class="row items-center no-wrap">
-          <div class="text-center">
-            Rebin + Download
-          </div>
-          <q-spinner size="1em" color="white" v-if="downloading"></q-spinner>
-        </div>
-      </q-btn>
-      <form :action="`${rebinning_api}timebin/nexus_download`" method="post" target="hiddenFrame">
-        <input ref="download_request_input" type="text" style="display:none;" name="request_str" />
-        <input ref="download_id_input" type="text" style="display:none;" name="download_id" />
-        <button ref="download_button" type="submit" style="display:none;">Rebin + Download</button>
-      </form>
-      <iframe name="hiddenFrame" width="0" height="0" border="0" style="display:none;"></iframe>
-    </div>
-    <div class="col column">
-      <div class="col row" v-show="shown_summary == selected_filename">
-        <div class="plotly col" ref="summary_plot_div" style=""></div>
-        <div class="plotly col" ref="frame_plot_div"></div>
+  <div class="container py-3">
+    <div class="row align-items-center mb-3">
+      <div class="col-auto">
+        <label class="form-label">Num. Bins</label>
+        <input class="form-control mx-2" type="number" v-model.number="num_bins" :disabled="!use_num" @keydown.enter="update_summary" />
       </div>
+      <div class="col-auto">
+        <label class="form-label">Mode</label>
+        <select class="form-select mx-2" v-model="use_num">
+          <option :value="true">Num.</option>
+          <option :value="false">Width</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Bin Width</label>
+        <input class="form-control mx-2" type="number" v-model.number="bin_width" :disabled="use_num" @keydown.enter="update_summary" />
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Start</label>
+        <input class="form-control mx-2" type="number" v-model.number="rebin_limits.x1" />
+      </div>
+      <div class="col-auto">
+        <label class="form-label">End</label>
+        <input class="form-control mx-2" type="number" v-model.number="rebin_limits.x2" />
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-primary mx-2" @click="reset_start_end">Reset start + end</button>
+      </div>
+    </div>
+    <div class="row justify-content-center mb-3">
+      <div class="col-auto" v-if="selected_filename && selected_path">
+        <button class="btn btn-success me-2" :disabled="fetching_summary" @click="update_summary">
+          Show Summary
+          <span v-if="fetching_summary" class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>
+        </button>
+        <button class="btn btn-secondary" :disabled="downloading" @click="download_rebinned">
+          Rebin + Download
+          <span v-if="downloading" class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>
+        </button>
+      </div>
+      <form :action="`${rebinning_api}timebin/nexus_download`" method="post" target="hiddenFrame" class="d-none">
+        <input ref="download_request_input" type="text" name="request_str" />
+        <input ref="download_id_input" type="text" name="download_id" />
+        <button ref="download_button" type="submit">Rebin + Download</button>
+      </form>
+      <iframe name="hiddenFrame" width="0" height="0" style="display:none;"></iframe>
+    </div>
+    <div class="row" v-show="shown_summary == selected_filename">
+      <div class="col" ref="summary_plot_div"></div>
+      <div class="col" ref="frame_plot_div"></div>
     </div>
   </div>
 </template>
@@ -77,10 +57,10 @@
 import { ref, onMounted, shallowRef, watchEffect } from 'vue';
 import { react } from 'plotly.js-dist';
 import { xSliceInteractor } from 'plotly-interactors';
-import { api_get, api_post, rebinning_api, metadata, metadata_request, selected_filename, selected_path, rebin_limits } from 'src/store';
-import { NumpyArray, NestedArray } from 'src/numpy_array';
-import { setupDrawLoop } from 'src/setupDrawLoop';
-import type { TimeBins, SummaryTimeRequest } from 'src/store';
+import { api_get, api_post, rebinning_api, metadata, metadata_request, selected_filename, selected_path, rebin_limits } from '@/store';
+import { NumpyArray, NestedArray } from '@/numpy_array';
+import { setupDrawLoop } from '@/setupDrawLoop';
+import type { TimeBins, SummaryTimeRequest } from '@/store';
 import { v4 as uuidv4 } from 'uuid';
 
 const download_button = ref<HTMLFormElement>();
@@ -122,7 +102,6 @@ const frame_fig_template = {
     },
     'config': {responsive: true},
 }
-
 
 function arange(start: number, end: number, step: number = 1) {
   const steps = Math.trunc((end - start) / step);
@@ -311,13 +290,13 @@ async function fetch_and_draw_frame({ det_name, point_number }: { det_name: stri
   frame_fig.data = [trace];
   frame_fig.layout.title =  `Frame ${det_name}: ${start_time.toFixed(4)} < time < ${end_time.toFixed(4)} (s)`;
   react(frame_plot_div.value, frame_fig.data, frame_fig.layout, frame_fig.config);
-
 }
 
 const draw_loop = setupDrawLoop(fetch_and_draw_frame, 'draw frame');
 
 function handle_summary_click(ev: { points: { data: { name: string }, pointNumber: number }[] }) {
   const { points } = ev;
+  console.log({ev, points});
   if (points.length > 0) {
     const { data: { name: det_name }, pointNumber: point_number } = points[0];
     draw_loop.draw_requested.value = {det_name, point_number};
@@ -342,9 +321,7 @@ watchEffect(() => {
   if (x_slice_interactor.value?.update) {
     x_slice_interactor.value.update();
   }
-
 });
-
 
 onMounted(() => {
   console.log({react});
@@ -357,7 +334,6 @@ onMounted(() => {
   const frame_fig = structuredClone(frame_fig_template);
   react(frame_plot_div.value, frame_fig.data, frame_fig.layout, frame_fig.config);
 })
-
 </script>
 
 <style>
