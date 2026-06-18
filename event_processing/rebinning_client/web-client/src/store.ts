@@ -210,3 +210,55 @@ export async function get_metadata() {
     // console.log(metadata_reply);
   }
 }
+
+// Check URL parameters to see if we should bypass the search screens
+// --- NEW INITIALIZATION LOGIC ---
+// Check URL parameters to see if we should bypass the search screens
+if (typeof window !== 'undefined') {
+  const urlParams = new URLSearchParams(window.location.search);
+  const fileParam = urlParams.get('filename');
+  let pathParam = urlParams.get('path');
+
+  if (fileParam) {
+    selected_filename.value = fileParam;
+    
+    // Wrap the initialization in an async function to await the API call
+    (async () => {
+      // 1. If path is missing, query the NCNR Metadata API to discover it
+      if (!pathParam) {
+        console.log(`No path provided for ${fileParam}. Searching metadata API...`);
+        try {
+          // Query the datafiles endpoint for this specific file
+          const search_results = await api_get(ncnr_metadata_api, 'datafiles', { 
+            filename: fileParam, 
+            limit: 1 
+          });
+          
+          if (search_results && search_results.length > 0) {
+            pathParam = search_results[0].localdir;
+            
+            // Bonus: Auto-populate the Experiment ID so the UI state is complete!
+            if (search_results[0].rxcycle_id) {
+              selected_experiment.value = search_results[0].rxcycle_id;
+            }
+            console.log(`Discovered path: ${pathParam}`);
+          } else {
+            console.warn(`Could not find ${fileParam} in the metadata database.`);
+          }
+        } catch (err) {
+          console.error("Error looking up datafile:", err);
+        }
+      }
+
+      // 2. If we successfully discovered (or were provided) a path, proceed!
+      if (pathParam) {
+        selected_path.value = pathParam;
+        active_tab.value = 'rebinning_params';
+        await get_metadata();
+      } else {
+        // Fallback: stay on the search tab if discovery failed
+        active_tab.value = 'datafile_search';
+      }
+    })();
+  }
+}
