@@ -104,7 +104,7 @@ const frame_fig_template = {
 }
 
 function arange(start: number, end: number, step: number = 1) {
-  const steps = Math.trunc((end - start) / step);
+  const steps = Math.ceil((end - start) / step);
   return Array.from({length: steps}).map((_, i) => start + (i * step));
 }
 
@@ -156,15 +156,18 @@ function get_edges(duration: number, nominal_start: number | null, nominal_end: 
 }
 
 function get_summary_time_bins_object() {
-  const offset_start = rebin_limits.x1 % bin_width.value;
-  const edges = get_edges(metadata.value.duration, offset_start, metadata.value.duration, bin_width.value, num_bins.value, use_num.value);
-  const result: TimeBins = {
+  const start = rebin_limits.x1;
+
+  // 2. Find the first bin edge near 0 that aligns with x1
+  const offset_start = start % bin_width.value;
+  const offset_duration = metadata.value.duration - offset_start;
+  const edges = get_edges(offset_duration, offset_start, offset_duration, bin_width.value, 0, false);
+
+  return {
     mode: 'time',
     mask: null,
     edges: NumpyArray.from_array(edges)
-  }
-  // console.log({summary_time_bins_object: result, edges})
-  return result;
+  };
 }
 
 function get_rebin_time_bins_object() {
