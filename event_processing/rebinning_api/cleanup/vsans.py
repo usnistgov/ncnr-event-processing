@@ -21,7 +21,7 @@ def to_detector_indices(pixel_ids: np.ndarray):
 import numpy as np
 
 
-def calculate_pixel_distances(nxdetector, detector_shortname, dims):
+def calculate_pixel_distances(nxdetector, detector_name: str, dims):
     """
     Calculates the exact sample-to-detector distance for each pixel.
     
@@ -35,7 +35,7 @@ def calculate_pixel_distances(nxdetector, detector_shortname, dims):
     if 'setback' in nxdetector:
         z += nxdetector['setback'][0] # setback is also in cm
 
-    if detector_shortname == "B":
+    if detector_name.endswith("_B"):
         # Back detector special handling
         # cal_x and cal_y are already stored in cm
         x_pixel_size = nxdetector['cal_x'][0]
@@ -82,7 +82,7 @@ def calculate_pixel_distances(nxdetector, detector_shortname, dims):
             # vertical_offset is natively stored in cm (no conversion needed)
             vertical_offset = nxdetector['vertical_offset'][0] 
             
-        pos_key = detector_shortname[-1]
+        pos_key = detector_name[-1]
         
         # Calculate real-space offsets based on panel position (all output variables in cm)
         # coeffs[0][0] is the spatial calibration offset in mm, so divide by 10.0 to get cm
@@ -117,13 +117,32 @@ def calculate_pixel_distances(nxdetector, detector_shortname, dims):
     
     return pixel_distances
 
-# DETECTORS = ["FR", "FT", "FB", "FL", "MB", "MR", "ML", "MT", "R"]
-DETECTORS = ["FR", "FT", "FB", "FL", "MB", "ML", "MR", "MT", "B"]
+def get_detector_ending(pixel_id):
+    """
+    Determines the detector_name ending ('R', 'T', 'B', 'L')
+    from a single encoded 'pixel_id' integer.
+    """
+    # Extract orig_x (the higher 16 bits)
+    orig_x = pixel_id >> 16
 
+    # Divide by 48 to find the offset chunk
+    chunk_index = orig_x // 48
 
-def partition_to_detector(partition_name: str):
-    print(f"partition {partition_name}")
-    return f"detector_{DETECTORS[int(partition_name)]}"
+    # Map the chunk index to the corresponding suffix
+    suffix_map = {
+        0: "R",  # orig_x between 0 and 47 (offset 0)
+        1: "T",  # orig_x between 48 and 95 (offset 48)
+        2: "B",  # orig_x between 96 and 143 (offset 96)
+        3: "L"   # orig_x between 144 and 191 (offset 144)
+    }
+
+    suffix = suffix_map.get(chunk_index)
+    if suffix is None:
+        raise ValueError(f"Invalid x pixel value {orig_x}, should be 0 < x < 191")
+    return suffix
+
+ALL_DETECTORS = ["FR", "FT", "FB", "FL", "MR", "MT", "MB", "ML", "B"]
+
 
 def cleanup(entry, raw_events: "EventsManager", datapath=""):
     make_table = False
@@ -147,50 +166,60 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     if make_table:
         print(f"    # Table data extracted from {datapath}")
         print(f"    # det  yrange   events =? integrated")
-    for k, detector_shortname in enumerate(DETECTORS):
-        detector_name = f"detector_{detector_shortname}"
+    for k, (name, event_pairs) in enumerate(detector_partitions.items()):
+        list_of_timestamp_arrays: list[np.ndarray] = event_pairs["timestamp"]
+        list_of_pixel_id_arrays: list[np.ndarray] = event_pairs["value"]
+        # Concatenate the arrays into single arrays
+        times = np.concatenate(list_of_timestamp_arrays)
+        pixel_ids = np.concatenate(list_of_pixel_id_arrays)
+
+        # Determine the detector ending based on the first pixel
+        if k == 8:
+            # last partition is the back detector (detector_B)
+            detector_ending = "B"
+            detector_name = "detector_B"
+        else:
+            detector_ending = get_detector_ending(pixel_ids[0])
+            detector_group = "F" if k < 4 else "M"
+            detector_name = f"detector_{detector_group}{detector_ending}"
+
         nxdetector = entry.get(f"instrument/{detector_name}", None)
         if nxdetector is None:
             logger.warning(f"Missing {entry.name}/instrument/{detector_name} in {datapath}")
             continue
 
+        dataset = nxdetector.get(f"data", None)
+        if dataset is None:
+            logger.warning(f"Missing {entry.name}/instrument/{detector_name}/data in {datapath}")
+            continue
         DAS = entry[nxdetector["data"].attrs['target']].parent
         dims = tuple(DAS['dimension'][()])
 
         distance = nxdetector["distance"][0] # cm
-        distance_table = calculate_pixel_distances(nxdetector, detector_shortname, dims)
+        distance_table = calculate_pixel_distances(nxdetector, detector_name, dims)
         
         logger.debug(f"detector {detector_name} distance: {distance}")
         logger.debug(f"distance table: min={distance_table.min()} max={distance_table.max()}")
 
-        key = f"detector_{k}"
-        if key in raw_events._fields:
-            event_pairs = raw_events._fields[key]
-            list_of_timestamp_arrays: list[np.ndarray] = event_pairs["timestamp"]
-            list_of_pixel_id_arrays: list[np.ndarray] = event_pairs["value"]
-            # Concatenate the arrays into single arrays
-            times = np.hstack(list_of_timestamp_arrays)
-            pixels = np.hstack(list_of_pixel_id_arrays)
-        else:
-            times, pixels = np.zeros(0, dtype='int64'), np.zeros(0, dtype='int64')
-        x, y = pixels >> 16, pixels & 0xFFFF
+        orig_x, orig_y = pixel_ids >> 16, pixel_ids & 0xFFFF
+        # x, y = pixels >> 16, pixels & 0xFFFF
         if make_table:
-            num_events = len(pixels)
+            num_events = len(pixel_ids)
             counts = nxdetector["integrated_count"][0]
             match = "yes" if counts == num_events else "NO!!!"
             print(f"    # {k}:{name} {x.min():3d}:{x.max():<3d} {num_events:7d} =? {counts:<7d} {match}")
             #print("  x", x)
             #print("  y", y)
         if detector_name == "detector_B":
-            pass
+            y, x = orig_y, orig_x
         elif detector_name[-1] == "R": # offset=0, flipud
-            y, x = 127-y, x
+            y, x = 127-orig_y, orig_x
         elif detector_name[-1] == "L": # offset=144, fliplr
-            y, x = y, 191-x
+            y, x = orig_y, 191-orig_x
         elif detector_name[-1] == "T": # swapaxes offset=48
-            y, x = x-48, y
+            y, x = orig_x-48, orig_y
         elif detector_name[-1] == "B": # swapaxes offset=96, fliplr, flipud
-            y, x = 143-x, 127-y
+            y, x = 143-orig_x, 127-orig_y
         else:
             raise ValueError(f"Unknown detector {name}, should be in FR FT FB FL MB MR ML MT R")
         #print(f"{k}:{name} {dims=} y:{y.min()}-{y.max():<3} x:{x.min()}-{x.max():<3}")
@@ -199,7 +228,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             bad_x = np.where((x < 0) | (x >= dims[0]))[0]
             bad_y = np.where((y < 0) | (y >= dims[1]))[0]
             bad = np.union1d(bad_x, bad_y)
-            logging.error(f"Bad pixels in {detector_name}: x={x[bad]}, y={y[bad]}, pixel_ids={pixels[bad]}")
+            logging.error(f"Bad pixels in {detector_name}: x={x[bad]}, orig_x={orig_x[bad]}, y={y[bad]}, orig_y={orig_y[bad]}, pixel_ids={pixels[bad]}")
             raise RuntimeError(f"Bad pixel id in {datapath} for detector {detector_name}")
         #print(f"times: {times.min()}:{times.max()} relative to {start}")
         #print(f"subtracting {start} from {times[0]} = {times[0]-start}")
@@ -214,6 +243,24 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         ts_sigma = time_correction_sigma.astype(int)
         result = dict(dims=dims, ts=times, ts_sigma=ts_sigma, x=x, y=y)
         detectors[detector_name] = result
+
+    # backfill with zeros any detectors not found:
+    for detector_shortname in ALL_DETECTORS:
+        detector_name = f"detector_{detector_shortname}"
+        if detector_name not in detectors:
+            logging.debug(f"Missing detector {detector_name} in events: setting to zeros array")
+            nxdetector = entry.get(f"instrument/{detector_name}", None)
+            if nxdetector is None:
+                logger.warning(f"Missing {entry.name}/instrument/{detector_name} in {datapath}")
+                continue
+            data = nxdetector.get(f"data", None)
+            if data is None:
+                logger.warning(f"Missing {entry.name}/instrument/{detector_name}/data in {datapath}")
+                continue
+            DAS = entry[data.attrs['target']].parent
+            dims = tuple(DAS['dimension'][()])
+
+            detectors[detector_name] = dict(dims=dims, ts=np.zeros(0, dtype='int64'), ts_sigma=np.zeros(0, dtype='int64'), x=np.zeros(0, dtype='int64'), y=np.zeros(0, dtype='int64'))
 
     # Treat the monitor as a detector named "monitor" so that we don't need
     # special handling during rebinning.
