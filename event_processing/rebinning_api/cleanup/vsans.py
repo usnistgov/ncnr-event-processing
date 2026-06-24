@@ -210,8 +210,8 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             print(f"    # {k}:{name} {x.min():3d}:{x.max():<3d} {num_events:7d} =? {counts:<7d} {match}")
             #print("  x", x)
             #print("  y", y)
-        if detector_name == "detector_B":
-            y, x = orig_y, orig_x
+        if detector_name == "detector_B": # swapaxes
+            y, x = orig_x, orig_y
         elif detector_name[-1] == "R": # offset=0, flipud
             y, x = 127-orig_y, orig_x
         elif detector_name[-1] == "L": # offset=144, fliplr
