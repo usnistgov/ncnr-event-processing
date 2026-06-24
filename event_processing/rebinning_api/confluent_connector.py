@@ -39,7 +39,8 @@ def kafka_consumer():
         'bootstrap.servers': kafka_url,
         'group.id': f'event_capture_replay_{uuid.uuid4().hex[:8]}',
         'auto.offset.reset': 'earliest',
-        'enable.auto.commit': False
+        'enable.auto.commit': False,
+        'enable.partition.eof': True
     }
     consumer = Consumer(config)
     try:
@@ -78,6 +79,7 @@ def stream_history(consumer: Consumer, topic: str, start: int, stop: int, partit
 
     # Assign all valid partitions ONCE. Never call assign() again in this loop.
     consumer.assign(valid_assignments)
+    consumer.resume(valid_assignments)
 
     # 3. THE CRITICAL FIX: Explicitly seek to force the C-queue to flush 
     # and ignore any previously cached offsets from older loops!
