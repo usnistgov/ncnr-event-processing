@@ -632,7 +632,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
                 total += time.perf_counter_ns() - t0
                 n += 1
             with_kafka = time.perf_counter_ns() - t_start
-            print(f"Processing time for {n} messages in {topic} is {total/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
+            print(f"Processing time for {n} messages in {topic} is {with_kafka/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
 
     db.close()
     return db
