@@ -14,8 +14,9 @@ from .binning import hist
 
 TIMESTAMP_RESOLUTION = 100e-9
 
-EVENTS_FOLDER = "cache/event_files"
+# EVENTS_FOLDER = "cache/event_files"
 EVENTS_ENDPOINT = "http://nicedata.ncnr.nist.gov/eventfiles"
+EVENTS_FOLDER = Path(__file__).parent.parent.parent / "cache" / "event_files"
 
 NUM_TUBE = 192
 NUM_PIXEL = 128
@@ -105,11 +106,13 @@ class VSANSEvents(object):
         data = np.fromfile(self.file, dtype=self.data_dtype, count=-1)
         self.file.close()
 
-        # convert timestamps from 6 byte LE to eight byte LE
-        ts = data['timestamp']
-        self.ts = np.pad(ts, ((0,0), (0, 2)), 'constant').view(np.uint64)[:,0]
-        self.tubeID = data['tubeID']
-        self.pixel = data['pixel']
+        self.tubeID = data['tubeID'].copy()
+        self.pixel = data['pixel'].copy()
+
+        num_events = len(data)
+        self.ts = np.zeros(num_events, dtype=np.uint64)
+        ts_bytes = self.ts.view(np.uint8).reshape(num_events, 8)
+        ts_bytes[:, :6] = data['timestamp']
 
     def rebin(self, time_slices=10):
         if hasattr(time_slices, 'size'):
@@ -146,27 +149,41 @@ class VSANSEvents(object):
 def demo():
     from matplotlib import pyplot as plt
 
-    cache = "cache/event_files"
+    # cache = "cache/event_files"
+    cache = EVENTS_FOLDER
     runs = [
+        "20200923065024850",
         "20201008221350744",
-        "20201009143217794",
-        "20201010115802114",
-        "20201011115726522",
+        # "20201009143217794",
+        # "20201010115802114",
+        # "20201011115726522",
     ]
     run = runs[0]
     events = {}
     for position in [0, 1]:
         filename = f"{cache}/{run}_{position}.hst"
-        events[position] = VSANSEvents(filename)
+        ev = VSANSEvents(filename)
 
-    for position in [0, 1]:
-        detectors, edges = events[position].rebin(100)
+        detectors, edges = ev.rebin(100)
         for name, data in detectors.items():
             integrated = np.sum(data, axis=-1)
             integrated = np.sum(integrated, axis=-1)
             #print(name, 'sum:', integrated, integrated.shape)
             plt.plot(edges[:-1], integrated, label=f"{name}-{position}")
+
+        del ev
+
     plt.legend()
+    plt.show()
+
+    # for position in [0, 1]:
+    #     detectors, edges = events[position].rebin(100)
+    #     for name, data in detectors.items():
+    #         integrated = np.sum(data, axis=-1)
+    #         integrated = np.sum(integrated, axis=-1)
+    #         #print(name, 'sum:', integrated, integrated.shape)
+    #         plt.plot(edges[:-1], integrated, label=f"{name}-{position}")
+    # plt.legend()
 
     if 1:
         # Shared (vmin, vmax) for colormap
