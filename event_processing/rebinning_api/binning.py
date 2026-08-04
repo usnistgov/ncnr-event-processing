@@ -206,7 +206,7 @@ def _hist_numpy_dd(dims, edges, ts, x, y):
 def _hist_numba(dims, edges, ts, x, y):
     nx, ny = dims
     n_bins = len(edges) - 1
-    index = np.argsort(ts)
+    index = np.argsort(ts, kind="stable")
     edges = np.asarray(edges, 'int64')
     ts = np.asarray(ts, 'int64')
     x = np.asarray(x, 'int32')
@@ -492,6 +492,8 @@ def _bin_by_device(events, edges, name, hysteresis=True):
         binned[name] = data[:, :, 1:-1]
 
     return result
+
+
 
 def test_hist():
     # 3 x 2 detector with 4 timesteps
