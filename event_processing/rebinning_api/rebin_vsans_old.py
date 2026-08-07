@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import requests
@@ -155,8 +156,12 @@ class VSANSEvents(object):
         return time_axis, hist
 
 def demo():
+    import logging
+    from time import perf_counter
     from matplotlib import pyplot as plt
 
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger('event_processing.rebinning_api.binning').setLevel(level=logging.DEBUG)
     # cache = "cache/event_files"
     cache = EVENTS_FOLDER
     runs = [
@@ -168,11 +173,19 @@ def demo():
     ]
     run = runs[0]
     events = {}
-    for position in [0, 1]:
+    positions = [0,1] # or [0,1]
+    for position in positions:
         filename = f"{cache}/{run}_{position}.hst"
+        load_start_time = perf_counter()
         ev = VSANSEvents(filename)
+        load_end_time = perf_counter()
+        logging.info(f"loading {filename} took {load_end_time - load_start_time:.3f} seconds")
 
+        rebin_start_time = perf_counter()
         detectors, edges = ev.rebin(100)
+        rebin_end_time = perf_counter()
+        logging.info(f"rebinning took {rebin_end_time - rebin_start_time:.3f} seconds")
+        events[position] = ev
         for name, data in detectors.items():
             integrated = np.sum(data, axis=-1)
             integrated = np.sum(integrated, axis=-1)
