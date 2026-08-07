@@ -103,16 +103,24 @@ class VSANSEvents(object):
 
     def read_data(self):
         self.seek_data_start()
-        data = np.fromfile(self.file, dtype=self.data_dtype, count=-1)
+        # Read the 8-byte events as flat 64-bit integers
+        raw_data = np.fromfile(self.file, dtype=np.int64, count=-1)
         self.file.close()
 
-        self.tubeID = data['tubeID'].copy()
-        self.pixel = data['pixel'].copy()
+        num_events = len(raw_data)
+        ts_bytes = raw_data.view(np.uint8).reshape(num_events, 8)
 
-        num_events = len(data)
-        self.ts = np.zeros(num_events, dtype=np.uint64)
-        ts_bytes = self.ts.view(np.uint8).reshape(num_events, 8)
-        ts_bytes[:, :6] = data['timestamp']
+        # Byte 0 is the tubeID (lowest 8 bits)
+        self.tubeID = ts_bytes[:, 0].copy()
+
+        # Byte 1 is the pixel (next 8 bits)
+        self.pixel = ts_bytes[:, 1].copy()
+
+
+        # Bytes 2 through 7 are the 6-byte timestamp (upper 48 bits)
+        # ...doing in-place shift to avoid creating new intermediate array
+        raw_data >>= 16
+        self.ts = raw_data
 
     def rebin(self, time_slices=10):
         if hasattr(time_slices, 'size'):
