@@ -1,3 +1,5 @@
+import math
+
 plancks_constant = 4.13566733e-15  #(10) eV s
 """ Planck's constant 4.13566733(10)e-15 eV s """
 
@@ -23,6 +25,16 @@ VELOCITY_FACTOR = (plancks_constant*electron_volt
 """
 (plancks_constant*electron_volt
                    / (neutron_mass * atomic_mass_constant)) * 1e10
+"""
+
+FWHM_to_sigma = math.sqrt(math.log(256))
+"""
+Conversion factor from FWHM to sigma: multiply by FWHM_to_sigma to get sigma
+"""
+
+sigma_to_FWHM = 1.0 / FWHM_to_sigma
+"""
+Conversion factor from sigma to FWHM: multiply by sigma_to_FWHM to get FWHM
 """
 
 def neutron_velocity(wavelength):
