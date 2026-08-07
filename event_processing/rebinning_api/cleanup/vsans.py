@@ -2,12 +2,14 @@ import numpy as np
 import logging
 import typing
 
-from .util import travel_time, get_partition, neutron_velocity
+from .util import travel_time, FWHM_to_sigma
 if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager, CleanedEvents
 
 
 logger = logging.getLogger(__name__)
+
+AUTO_BIT_SHAVING = False
 
 def extra_detector_distance(x: int | np.ndarray, y: int | np.ndarray):
     # TODO: add actual pixel-by-pixel additional distance?
@@ -99,7 +101,7 @@ def calculate_pixel_distances(nxdetector, detector_name: str, dims):
             realDistX = x_pixel_size * 0.5 + lateral_offset + panel_gap / 2.0
             realDistY = coeffs[0][0] / 10.0
         else:
-            raise ValueError(f"Unknown position key {pos_key} for {detector_shortname}")
+            raise ValueError(f"Unknown position key {pos_key} for {detector_name}")
 
     # Relocate distance from the beam center (in cm)
     x0_pos = realDistX - beam_center_x
@@ -155,7 +157,8 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     # TODO: need to associated redpanda detector number with nexus detector field
     start = raw_events.start[0]
     wavelength = entry["instrument/beam/monochromator/wavelength"][0]
-    wavelength_spread = entry["instrument/beam/monochromator/wavelength_spread"][0]
+    # wavelength_spread is a fraction (already divided by wavelength), unitless dL/L
+    wavelength_spread_FWHM = entry["instrument/beam/monochromator/wavelength_spread"][0]
     detector_partitions = raw_events.get_detectors()
 
     #print(f"{wavelength=} {wavelength_spread=}")
@@ -228,7 +231,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             bad_x = np.where((x < 0) | (x >= dims[0]))[0]
             bad_y = np.where((y < 0) | (y >= dims[1]))[0]
             bad = np.union1d(bad_x, bad_y)
-            logging.error(f"Bad pixels in {detector_name}: x={x[bad]}, orig_x={orig_x[bad]}, y={y[bad]}, orig_y={orig_y[bad]}, pixel_ids={pixels[bad]}")
+            logging.error(f"Bad pixels in {detector_name}: x={x[bad]}, orig_x={orig_x[bad]}, y={y[bad]}, orig_y={orig_y[bad]}, pixel_ids={pixel_ids[bad]}")
             raise RuntimeError(f"Bad pixel id in {datapath} for detector {detector_name}")
         #print(f"times: {times.min()}:{times.max()} relative to {start}")
         #print(f"subtracting {start} from {times[0]} = {times[0]-start}")
@@ -237,11 +240,37 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         
         # 3. Calculate corrected times per event using vectorization
         time_correction = travel_time(pixel_dists, wavelength)
-        time_correction_sigma = time_correction * wavelength_spread / wavelength
+        time_correction_sigma = time_correction * wavelength_spread_FWHM * FWHM_to_sigma
 
         times -= start + time_correction.astype(int)
         ts_sigma = time_correction_sigma.astype(int)
-        result = dict(dims=dims, ts=times, ts_sigma=ts_sigma, x=x, y=y)
+
+        # Sort by time
+        index = np.argsort(times, kind="stable")
+        times = times[index]
+        x = x[index]
+        y = y[index]
+        ts_sigma_stats = {
+            "mean": ts_sigma.mean(),
+            "std": ts_sigma.std(),
+            "max": ts_sigma.max(),
+            "min": ts_sigma.min(),
+        }
+
+        # shave bits
+        if AUTO_BIT_SHAVING and ts_sigma_stats["min"] > 1:
+            # Number of bits to keep below the 1-sigma threshold
+            EXTRA_BITS = 3
+            sigma_bits = int(np.log2(ts_sigma_stats["min"]))
+            bits_to_shave = max(0, sigma_bits - EXTRA_BITS)
+            if bits_to_shave > 0:
+                print(f"Shaving {bits_to_shave} bits from ts_sigma, because minimum is {ts_sigma_stats['min']}")
+            
+                # 3. Bit Shave: Shift right to drop the lowest bits, then left to restore magnitude
+                # Example: 101101 >> 3 = 101; 101 << 3 = 101000
+                times = (times >> bits_to_shave) << bits_to_shave
+
+        result = dict(dims=dims, ts=times, x=x, y=y, ts_sigma_stats=ts_sigma_stats)
         detectors[detector_name] = result
 
     # backfill with zeros any detectors not found:
