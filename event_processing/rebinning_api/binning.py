@@ -1,8 +1,11 @@
+import logging
 import os
 import numpy as np
 import scipy.integrate
 
 from . import models
+
+logger = logging.getLogger(__name__)
 
 def bin(entry, point, bins:models.Bins, events):
     """
@@ -203,36 +206,38 @@ def _hist_numpy_dd(dims, edges, ts, x, y):
     binned = binned[:-1] # trim the right edge
     return np.asarray(binned, dtype='int32')
 
-def _hist_numba(dims, edges, ts, x, y):
+def _hist_numba(dims, edges, ts, x, y, sorted=False):
+    import time
+    
     nx, ny = dims
     n_bins = len(edges) - 1
-    index = np.argsort(ts, kind="stable")
-    edges = np.asarray(edges, 'int64')
-    ts = np.asarray(ts, 'int64')
-    x = np.asarray(x, 'int32')
-    y = np.asarray(y, 'int32')
+    t0_sorting = time.perf_counter()
+    if not sorted:
+        index = np.argsort(ts, kind="stable")
+        ts = ts[index]
+        x = x[index]
+        y = y[index]
+    logger.debug(f"sorting took {time.perf_counter()-t0_sorting:.3f} seconds")
+
+    edges = np.asarray(edges)
     binned = np.zeros((n_bins, nx, ny), dtype='int32')
-    _numba_binning(binned, edges, ts, x, y, index)
+
+    t0_binning = time.perf_counter()
+    _numba_binning_parallel_aligned(binned, edges, ts, x, y)
+    logger.debug(f"binning took {time.perf_counter()-t0_binning:.3f} seconds")
     return binned
 
-# TODO: parallel algorithm
-# After sorting (in parallel since the indices are already partially sorted?),
-# partition the indices to the various processors, then for each process skip
-# to the next edge. If still within the partition, then process until the next
-# edge after the end of its partition, otherwise exit. There should be no read
-# contention even though multiple processors may be reading data in the overlap
-# region. There will be no write contention because every process is working
-# in its own time slices.
 try:
-    from numba import njit
+    from numba import njit, prange
     HAVE_NUMBA = True
 except ImportError:
     HAVE_NUMBA = False
     def njit(*args, **kw):
         return lambda x: x
+    prange = range
 # print(f"{HAVE_NUMBA=}")
 
-@njit('void(int32[:,:,:], int64[:], int64[:], int32[:], int32[:], int64[:])', cache=True)
+@njit(cache=True)
 def _numba_binning(bins, edges, ts, x, y, index):
     # Skip leading elements outside the histogram range
     next_edge = edges[0]
@@ -261,15 +266,76 @@ def _numba_binning(bins, edges, ts, x, y, index):
     # Past the final edge or no more events so done
     return
 
-# TODO: not sure why this is here
-def force_numba_compile():
-    edges = np.arange(2, dtype='uint64')
-    tubeID = np.zeros(0, dtype='uint8')
-    pixel = np.zeros(0, dtype='uint8')
-    times = np.zeros(0, dtype='uint64')
-    index = np.zeros(0, dtype='int64')
-    _numba_binning(edges, tubeID, pixel, times, index)
-#force_numba_compile()
+@njit(parallel=True, cache=True)
+def _numba_binning_parallel(bins, edges, ts, x, y, index):
+    n_edges = edges.size
+    n_events = index.size
+    
+    if n_edges < 2 or n_events == 0:
+        return
+
+    # 1. Monotonic Binary Search (Serial, extremely fast)
+    bounds = np.empty(n_edges, dtype=np.intp)
+    low = 0
+    for i in range(n_edges):
+        target = edges[i]
+        left = low
+        right = n_events
+        while left < right:
+            mid = (left + right) >> 1
+            if ts[index[mid]] < target:
+                left = mid + 1
+            else:
+                right = mid
+        bounds[i] = left
+        low = left
+
+    # 2. Parallel Binning (Brute-forces the memory latency)
+    # prange distributes the chunks of work across all your CPU cores
+    for i in prange(n_edges - 1):
+        start_j = bounds[i]
+        end_j = bounds[i+1]
+        
+        for j in range(start_j, end_j):
+            ev = index[j]
+            bins[i, x[ev], y[ev]] += 1
+
+    return
+
+@njit(cache=True, parallel=True)
+def _numba_binning_parallel_aligned(bins, edges, ts_aligned, x_aligned, y_aligned):
+    n_edges = edges.size
+    n_events = ts_aligned.size
+    
+    if n_edges < 2 or n_events == 0:
+        return
+
+    # 1. Monotonic Binary Search
+    bounds = np.empty(n_edges, dtype=np.intp)
+    low = 0
+    for i in range(n_edges):
+        target = edges[i]
+        left = low
+        right = n_events
+        while left < right:
+            mid = (left + right) >> 1
+            if ts_aligned[mid] < target:
+                left = mid + 1
+            else:
+                right = mid
+        bounds[i] = left
+        low = left
+
+    # 2. Pure Sequential Binning
+    for i in prange(n_edges - 1):
+        start_j = bounds[i]
+        end_j = bounds[i+1]
+        
+        for j in range(start_j, end_j):
+            bins[i, x_aligned[j], y_aligned[j]] += 1
+
+    return
+
 
 # TODO: make a histogrammming backend selector
 BACKEND = os.environ.get("BACKEND", "numba")
