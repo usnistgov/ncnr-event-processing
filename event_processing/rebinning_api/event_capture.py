@@ -116,9 +116,6 @@ import warnings
 from kafka import KafkaConsumer, TopicPartition
 from kafka.consumer.fetcher import ConsumerRecord
 import kafka.structs
-# import fastavro
-# import avro
-# import avro.io
 import avroc
 import numpy as np
 
@@ -132,6 +129,8 @@ else:
 from . import nexus_util
 from . import data_cache
 from . import cleanup
+from . import rebin_vsans_old
+from . import util
 
 REDPANDA_IP = "129.6.10.216"
 REDPANDA_STREAM_PORT = '9092'
@@ -153,7 +152,6 @@ def get_schema(schema_id: int):
 def get_decoder(schema_id: int):
     if schema_id == 2:
         return numba_decoder_2(schema_id)
-        # return pyruhvro_decoder(schema_id)
 
     schema = get_schema(schema_id)
     return avro_decoder(schema)
@@ -165,29 +163,6 @@ def avro_decoder(schema):
         with BytesIO(message.value) as fd:
             return reader(fd)
             #return SimpleNamespace(**data) # doesn't work for nested structures
-    return decoder
-
-def fastavro_decoder(schema):
-    def decoder(message):
-        with BytesIO(message.value) as fd:
-            return fastavro.read.schemaless_reader(fd, schema)
-    return decoder
-
-def pyruhvro_decoder(schema_id):
-    from pyruhvro import deserialize_array
-
-    schema = get_schema(schema_id)
-
-    def decoder(message):
-        batches = deserialize_array([message.value], schema)
-        arrow_array = batches[0]
-        struct_array = arrow_array.flatten()
-        timestamps = struct_array.field("timestamp").to_numpy()
-        pixel_ids = struct_array.field("pixel_id").to_numpy()
-        return {
-            "timestamp": message.timestamp,
-            "neutrons": [ {"timestamp": timestamps, "pixel_id": pixel_ids } ]
-        }
     return decoder
 
 def numba_decoder_2(schema_id: int):
@@ -344,7 +319,7 @@ def event_cleanup(entry, raw_events, datapath=""):
     of flight from sample to detector. (when completed) we will convert detector pixels
     into numpy arrays with zero indexing into a compact array
     """
-    instrument = lookup_instrument(entry)
+    instrument = util.lookup_instrument(entry)
     cleanup_fn = cleanup.CLEANUP_FNS.get(instrument, None)
     if cleanup_fn is not None:
         return cleanup_fn(entry, raw_events, datapath=datapath)
@@ -469,16 +444,6 @@ def parse_timestamp(field):
     dt = datetime.fromisoformat(timestamp)
     return int(dt.timestamp()*1000)
 
-INSTRUMENTS = {
-    'NG3-VSANS': 'vsans',
-    'NCNR Candor': 'candor',
-    'SANS:NGB30': 'ngb30msans',
-    'SANS:NG7': 'ng7sans',
-    }
-
-def lookup_instrument(entry):
-    name = entry['instrument/name'][0].decode('utf8')
-    return INSTRUMENTS[name]
 
 #def cache_filename(instrument, timestamp):
 #    dt = datetime.fromtimestamp(timestamp)
@@ -508,6 +473,21 @@ def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
             entry = nexus[entry_name]
             for point, _start in enumerate(entry['DAS_logs/counter/startTime']):
                 point_events = _fetch_events_for_point(consumer, entry, point)
+                if cleanup:
+                    event_cleanup(entry, point_events, datapath=datapath)
+                dbs.append(point_events)
+    finally:
+        nexus.close()
+    return dbs
+
+def fetch_hst_for_file(filename, datapath="", cleanup=True):
+    nexus = data_cache.load_nexus(filename, datapath)
+    dbs = []
+    try:
+        for entry_name in nexus_util.nexus_entries(nexus):
+            entry = nexus[entry_name]
+            for point, _start in enumerate(entry['DAS_logs/counter/startTime']):
+                point_events = rebin_vsans_old.events_manager_from_files(entry)
                 if cleanup:
                     event_cleanup(entry, point_events, datapath=datapath)
                 dbs.append(point_events)
@@ -545,7 +525,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     else:
         arm_time = entry["DAS_logs/counter/eventStartTime"][point]
         disarm_time = entry["DAS_logs/counter/eventStopTime"][point]
-    instrument = lookup_instrument(entry)
+    instrument = util.lookup_instrument(entry)
     #print(f"{instrument=}")
     # TODO: use nexus filename plus point number for easier file management
     # TODO: EventsManager is no longer caching
