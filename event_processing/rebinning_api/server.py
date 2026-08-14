@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import re
+import sys
 from typing import Annotated
 import uuid
 import logging
@@ -26,10 +27,21 @@ from . import rebin_vsans_old
 from . import nexus_util
 from . import event_capture
 from . import binning
+from . import data_cache
 
 
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
+# Base folder for the on-disk nexus/event cache; nexus files live in
+# <CACHE_ROOT>/nexus_files, event files in <CACHE_ROOT>/event_files.
+CACHE_ROOT: Path = Path.cwd() / "cache"
+# When True (via "serve --local-events" or the "rebin" CLI command), events
+# are read from local .hst files under CACHE_ROOT / "event_files" instead of
+# being fetched from the live kafka stream.
+USE_LOCAL_EVENTS: bool = False
+# When True, nexus files are re-searched and re-downloaded even if already
+# present in CACHE_ROOT / "nexus_files".
+REFRESH_CACHE: bool = False
 CACHE_VERSION = "0.2"
 CACHE_SIZE = int(100e9) # 100 GB
 CACHE_ITEMS = 100 # max number of items, if not using items size in cache
@@ -123,13 +135,18 @@ def unbundle(reply):
 @app.post("/metadata")
 def get_metadata(request: models.Measurement):
     point = request.point
-    entry = nexus_util.open_nexus_entry(request)
+    entry = nexus_util.open_nexus_entry(request, refresh=REFRESH_CACHE)
     #print("entry", entry, entry.parent)
     # Go up to the root to get the other NXentry items in the file.
     entries = nexus_util.nexus_entries(entry.parent)
     timestamp = entry['start_time'][0].decode('ascii')
     duration = float(entry['control/count_time'][point])
-    numpoints = entry['DAS_logs/trajectory/liveScanLength'][0]
+    if 'DAS_logs/trajectory/liveScanLength' in entry:
+        numpoints = entry['DAS_logs/trajectory/liveScanLength'][0]
+    elif 'DAS_logs/trajectory/length' in entry:
+        numpoints = entry['DAS_logs/trajectory/length'][0]
+    else:
+        raise ValueError(f"can't extract numpoints")
     replacement = nexus_util.nexus_detector_replacement(entry)
     #print("detector data links", replacement)
     detectors = list(replacement.keys())
@@ -267,7 +284,7 @@ def get_nexus(measurement: models.Measurement, bins):
     # TODO: check that there is only one entry with one point
     # TODO: replace monitor, and any devices that are binned
     binned = bin_events(measurement, bins, summary=False)
-    entry = nexus_util.open_nexus_entry(measurement)
+    entry = nexus_util.open_nexus_entry(measurement, refresh=REFRESH_CACHE)
     try:
         data = nexus_util.nexus_dup(entry, binned, bins)
     finally:
@@ -289,17 +306,24 @@ def bin_events(measurement: models.Measurement, bins, summary=False):
     summed_key = (*key, "summed", "v1")
     if binned_key not in CACHE:
         #print("processing events")
-        entry = nexus_util.open_nexus_entry(measurement)
+        entry = nexus_util.open_nexus_entry(measurement, refresh=REFRESH_CACHE)
         try:
             # CRUFT: we are allowing some old vsans histograms to run for demo purposes.
-            if measurement.filename.startswith('sans') and measurement.filename < "sans72000":
+            # Skipped when reading events from a local cache, since that path already
+            # handles old-format vsans files via the full event_cleanup/binning pipeline.
+            if not USE_LOCAL_EVENTS and measurement.filename.startswith('sans') and measurement.filename < "sans72000":
                 result = _bin_by_time_old_vsans(entry, bins)
             else:
                 # TODO: drop raw events cache once we have event_cleanup working for everything
                 if events_key not in CACHE:
-                    print(f"{tic()-T0:.6f}: fetching raw events for {entry.file.filename}")
-                    # event_capture.setup()  # in case it hasn't already been setup for sim
-                    raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
+                    if USE_LOCAL_EVENTS:
+                        events_folder = CACHE_ROOT / "event_files"
+                        print(f"{tic()-T0:.6f}: loading events from {events_folder}")
+                        raw_events = rebin_vsans_old.events_manager_from_files(entry, events_folder=events_folder)
+                    else:
+                        print(f"{tic()-T0:.6f}: fetching raw events for {entry.file.filename}")
+                        # event_capture.setup()  # in case it hasn't already been setup for sim
+                        raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
                     print(f"{tic()-T0:.6f}: correcting events")
                     event_capture.event_cleanup(entry, raw_events)
                     #print(raw_events.__dict__)
@@ -441,7 +465,7 @@ To run the actual server for responding to web requests use uvicorn:
     uvicorn event_processing.rebinning_api.server:app
 """
 
-def cli_rebin(filename: str, path: str, interval: int, preview: bool = False):
+def cli_rebin(filename: str, path: str, interval: int, cache: str = None, refresh: bool = False, preview: bool = False):
     """Handles the CLI execution for rebinning or launching the preview."""
     if preview:
         import webbrowser
@@ -451,26 +475,37 @@ def cli_rebin(filename: str, path: str, interval: int, preview: bool = False):
         webbrowser.open(url)
         return
 
-    # Headless execution
+    # Headless execution: read events from a local cache instead of the
+    # live kafka stream.
+    global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE
+    CACHE_ROOT = Path(cache) if cache else Path.cwd() / "cache"
+    USE_LOCAL_EVENTS = True
+    REFRESH_CACHE = refresh
+    data_cache.configure(CACHE_ROOT)
+
     from . import client
     print(f"Loading measurement for {filename}...")
     measurement = models.Measurement(filename=filename, path=path, point=0)
-    
+
     print("Fetching metadata...")
     metadata = get_metadata(measurement)
-    
+
     print(f"Generating bins with interval {interval}...")
     bins = client.time_linbins(metadata, interval=interval)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
-    
+
     print("Processing events and generating Nexus file (this may take a moment)...")
-    hdf = get_timebin_nexus(request)
-    
+    try:
+        hdf = get_timebin_nexus(request)
+    except FileNotFoundError as e:
+        print(f"Warning: {e}")
+        sys.exit(1)
+
     # Save the file
     out_filename = f"{Path(filename).stem}_rebinned{Path(filename).suffix}"
     with open(out_filename, 'wb') as fd:
         fd.write(base64.b64decode(hdf.base64_data))
-        
+
     print(f"Success! Rebinned file saved to ./{out_filename}")
 
 def main():
@@ -482,10 +517,12 @@ def main():
     parser_serve = subparsers.add_parser('serve', help='Start the FastAPI backend server.')
     parser_serve.add_argument('--host', type=str, default='127.0.0.1', help='Host IP address to bind to.')
     parser_serve.add_argument('--port', type=int, default=8000, help='Port to bind to (default: 8000).')
-    parser_serve.add_argument('--reload', action='store_true', help='Enable auto-reload for development.')
     parser_serve.add_argument('--filename', type=str, help='Filename to pre-load in the GUI on startup.')
     parser_serve.add_argument('--path', type=str, default='', help='Path to the data directory.')
     parser_serve.add_argument('--preview', action='store_true', help='Open the GUI in the browser once the server starts.')
+    parser_serve.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Nexus files are cached in <cache>/nexus_files; event files are read from <cache>/event_files when --local-events is set.')
+    parser_serve.add_argument('--local-events', action='store_true', help='Read event data from pre-populated files in <cache>/event_files instead of the live kafka stream.')
+    parser_serve.add_argument('--refresh', action='store_true', help='Force re-searching and re-downloading nexus files even if already present in the cache.')
 
     # --- Command: clear ---
     subparsers.add_parser('clear', help='Empties any caches associated with the data.')
@@ -501,6 +538,8 @@ def main():
     parser_rebin.add_argument('filename', type=str, help='Name of the nexus file (e.g., sans72222.nxs.ngv)')
     parser_rebin.add_argument('--path', type=str, default='', help='Path to the data directory')
     parser_rebin.add_argument('--interval', type=int, default=500, help='Bin interval (default: 500)')
+    parser_rebin.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Event files are expected in <cache>/event_files.')
+    parser_rebin.add_argument('--refresh', action='store_true', help='Force re-searching and re-downloading the nexus file even if already present in the cache.')
     parser_rebin.add_argument('--preview', action='store_true', help='Open the file in the GUI browser instead of processing locally')
 
     args = parser.parse_args()
@@ -514,6 +553,13 @@ def main():
         import time
 
         print(f"args: {args}")
+
+        global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE
+        CACHE_ROOT = Path(args.cache) if args.cache else Path.cwd() / "cache"
+        USE_LOCAL_EVENTS = args.local_events
+        REFRESH_CACHE = args.refresh
+        data_cache.configure(CACHE_ROOT)
+
         if args.preview:
             def wait_and_open():
                 # Now that FastAPI serves the frontend, we use its port!
@@ -545,7 +591,7 @@ def main():
             threading.Thread(target=wait_and_open, daemon=True).start()
 
         print(f"Starting API and Web server on http://{args.host}:{args.port} ...")
-        uvicorn.run("event_processing.rebinning_api.server:app", host=args.host, port=args.port, reload=args.reload)
+        uvicorn.run(app, host=args.host, port=args.port)
         
     elif args.command == "clear":
         CACHE.clear()
@@ -560,7 +606,7 @@ def main():
     elif args.command == "check3":
         check3()
     elif args.command == "rebin":
-        cli_rebin(args.filename, args.path, args.interval, args.preview)
+        cli_rebin(args.filename, args.path, args.interval, args.cache, args.refresh, args.preview)
     else:
         parser.print_help()
 
