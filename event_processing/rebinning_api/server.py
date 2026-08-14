@@ -28,12 +28,14 @@ from . import nexus_util
 from . import event_capture
 from . import binning
 from . import data_cache
+from . import event_cache
 
 
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
 # Base folder for the on-disk nexus/event cache; nexus files live in
-# <CACHE_ROOT>/nexus_files, event files in <CACHE_ROOT>/event_files.
+# <CACHE_ROOT>/nexus_files, event files in <CACHE_ROOT>/event_files, and
+# persisted cleaned events live in <CACHE_ROOT>/events_cache.
 CACHE_ROOT: Path = Path.cwd() / "cache"
 # When True (via "serve --local-events" or the "rebin" CLI command), events
 # are read from local .hst files under CACHE_ROOT / "event_files" instead of
@@ -42,6 +44,10 @@ USE_LOCAL_EVENTS: bool = False
 # When True, nexus files are re-searched and re-downloaded even if already
 # present in CACHE_ROOT / "nexus_files".
 REFRESH_CACHE: bool = False
+# When set (via "rebin --events-file"), cleaned events are loaded from this
+# user-provided events+nexus file before falling back to the normal cache
+# lookup / live fetch. Set from the CLI, not from the web API.
+EVENTS_FILE_OVERRIDE: Path | None = None
 CACHE_VERSION = "0.2"
 CACHE_SIZE = int(100e9) # 100 GB
 CACHE_ITEMS = 100 # max number of items, if not using items size in cache
@@ -272,6 +278,62 @@ async def download_nexus_form(request_str: Annotated[str, Form()], download_id: 
         raise e
 
 
+def ensure_events_download(measurement: models.Measurement) -> Path:
+    """
+    Helper for the events download endpoint: makes sure the on-disk
+    events-cache copy of the nexus file has this measurement's cleaned
+    events persisted, and returns its path.
+    """
+    entry = nexus_util.open_nexus_entry(measurement, refresh=REFRESH_CACHE)
+    try:
+        ensure_cleaned_events(measurement, entry)
+    finally:
+        entry.file.close()
+    return event_cache.events_cache_path(measurement.filename)
+
+
+@app.post('/events/download')
+async def download_events_form(request_str: Annotated[str, Form()], download_id: Annotated[str, Form()] = ''):
+    """ post request coming from HTML form, that can trigger a download of the events+nexus file """
+    request_dict = json.loads(request_str)
+    measurement = models.Measurement(**request_dict)
+    coro = asyncio.to_thread(ensure_events_download, measurement)
+    try:
+        path = await coro
+        orig_filename = measurement.filename
+        orig_path = Path(orig_filename)
+        file_suffixes = ''.join(orig_path.suffixes)
+        file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
+        new_filename = f"{file_stem}_events{file_suffixes}"
+        buffer_size = 2**16 # 64K
+        content_length = str(path.stat().st_size)
+        async def result_streamer():
+            with open(path, 'rb') as fd:
+                buffer = fd.read(buffer_size)
+                while buffer:
+                    yield buffer
+                    buffer = fd.read(buffer_size)
+            if (download_id != ''):
+                COMPLETED_DOWNLOADS.append(download_id)
+
+        last_updated_pattern = "%a, %d %b %Y %H:%M:%S GMT"
+        last_modified = datetime.datetime.strftime(datetime.datetime.now(datetime.timezone.utc), last_updated_pattern)
+        etag = hashlib.md5(f'{last_modified}-{content_length}'.encode(), usedforsecurity=False).hexdigest()
+        headers = {
+            'Content-Disposition': f'attachment; filename="{new_filename}"',
+            'Content-Type': 'application/x-hdf5',
+            'Content-Length': content_length,
+            'Last-Modified': last_modified,
+            'ETag': etag,
+            'Access-Control-Allow-Origin': '*',
+        }
+        return StreamingResponse(result_streamer(), headers=headers)
+    except Exception as e:
+        if (download_id != ''):
+            PROCESSING_ERRORS[download_id] = str(e)
+        raise e
+
+
 def get_nexus(measurement: models.Measurement, bins):
     """
     Helper for nexus writer endpoints, which takes the binned detectors, etc.
@@ -292,6 +354,40 @@ def get_nexus(measurement: models.Measurement, bins):
     return data
 
 
+def ensure_cleaned_events(measurement: models.Measurement, entry):
+    """
+    Return cleaned (time-of-flight corrected) events for measurement+entry,
+    loading them from the on-disk events cache if already persisted there,
+    or fetching and cleaning them from the raw source (kafka / local event
+    files) and persisting the result otherwise.
+    """
+    from timeit import default_timer as tic; T0 = tic()
+    events = None
+    if EVENTS_FILE_OVERRIDE is not None:
+        print(f"{tic()-T0:.6f}: loading events from {EVENTS_FILE_OVERRIDE}")
+        events = event_cache.load_cached_events(measurement, entry.name, path=EVENTS_FILE_OVERRIDE)
+    elif not REFRESH_CACHE:
+        events = event_cache.load_cached_events(measurement, entry.name)
+    if events is not None:
+        return events
+
+    if USE_LOCAL_EVENTS:
+        events_folder = CACHE_ROOT / "event_files"
+        print(f"{tic()-T0:.6f}: loading events from {events_folder}")
+        raw_events = rebin_vsans_old.events_manager_from_files(entry, events_folder=events_folder)
+    else:
+        print(f"{tic()-T0:.6f}: fetching raw events for {entry.file.filename}")
+        # event_capture.setup()  # in case it hasn't already been setup for sim
+        raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
+    print(f"{tic()-T0:.6f}: correcting events")
+    event_capture.event_cleanup(entry, raw_events)
+    events = raw_events._cleaned_fields
+    meta = dict(start=raw_events.start, stop=raw_events.stop, arm=raw_events.arm, disarm=raw_events.disarm)
+    event_cache.save_cleaned_events(measurement, entry.name, events, meta=meta)
+    print(f"{tic()-T0:.6f}: cached events to disk")
+    return events
+
+
 def bin_events(measurement: models.Measurement, bins: models.TimeBins, summary=False):
     from timeit import default_timer as tic; T0 = tic()
     if bins.mode != "time":
@@ -300,8 +396,6 @@ def bin_events(measurement: models.Measurement, bins: models.TimeBins, summary=F
     key = (request_key(measurement), request_key(bins))
     #print("Key:", key)
     # Increment version number if the data changes
-    # raw_events_key = (key[0], "raw", "v1")  # events keyed by entry, not bin spec
-    events_key = (key[0], "events", "v1")
     binned_key = (*key, "binned", "v1")   # binning keyed by both entry and bin spec
     summed_key = (*key, "summed", "v1")
     if binned_key not in CACHE:
@@ -314,23 +408,7 @@ def bin_events(measurement: models.Measurement, bins: models.TimeBins, summary=F
             if not USE_LOCAL_EVENTS and measurement.filename.startswith('sans') and measurement.filename < "sans72000":
                 result = _bin_by_time_old_vsans(entry, bins)
             else:
-                # TODO: drop raw events cache once we have event_cleanup working for everything
-                if events_key not in CACHE:
-                    if USE_LOCAL_EVENTS:
-                        events_folder = CACHE_ROOT / "event_files"
-                        print(f"{tic()-T0:.6f}: loading events from {events_folder}")
-                        raw_events = rebin_vsans_old.events_manager_from_files(entry, events_folder=events_folder)
-                    else:
-                        print(f"{tic()-T0:.6f}: fetching raw events for {entry.file.filename}")
-                        # event_capture.setup()  # in case it hasn't already been setup for sim
-                        raw_events = event_capture.fetch_events_to_memory(entry, measurement.point)
-                    print(f"{tic()-T0:.6f}: correcting events")
-                    event_capture.event_cleanup(entry, raw_events)
-                    #print(raw_events.__dict__)
-                    events = raw_events._cleaned_fields
-                    #print(events)
-                    CACHE[events_key] = events
-                events = CACHE[events_key]
+                events = ensure_cleaned_events(measurement, entry)
                 print(f"{tic()-T0:.6f}: binning")
                 result = binning.bin(entry, measurement.point, bins, events)
                 print(f"{tic()-T0:.6f}: binned")
@@ -465,7 +543,7 @@ To run the actual server for responding to web requests use uvicorn:
     uvicorn event_processing.rebinning_api.server:app
 """
 
-def cli_rebin(filename: str, path: str, interval: int, cache: str = None, refresh: bool = False, preview: bool = False):
+def cli_rebin(filename: str, path: str, interval: int, cache: str = None, refresh: bool = False, preview: bool = False, events_file: str = None):
     """Handles the CLI execution for rebinning or launching the preview."""
     if preview:
         import webbrowser
@@ -477,11 +555,13 @@ def cli_rebin(filename: str, path: str, interval: int, cache: str = None, refres
 
     # Headless execution: read events from a local cache instead of the
     # live kafka stream.
-    global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE
+    global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE, EVENTS_FILE_OVERRIDE
     CACHE_ROOT = Path(cache) if cache else Path.cwd() / "cache"
     USE_LOCAL_EVENTS = True
     REFRESH_CACHE = refresh
+    EVENTS_FILE_OVERRIDE = Path(events_file) if events_file else None
     data_cache.configure(CACHE_ROOT)
+    event_cache.configure(CACHE_ROOT)
 
     from . import client
     print(f"Loading measurement for {filename}...")
@@ -507,6 +587,25 @@ def cli_rebin(filename: str, path: str, interval: int, cache: str = None, refres
         fd.write(base64.b64decode(hdf.base64_data))
 
     print(f"Success! Rebinned file saved to ./{out_filename}")
+
+def cli_save_events(filename: str, path: str, point: int, entry: int, cache: str = None, refresh: bool = False, output: str = None):
+    """Handles the CLI execution for fetching, cleaning, and persisting events without binning."""
+    global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE
+    CACHE_ROOT = Path(cache) if cache else Path.cwd() / "cache"
+    USE_LOCAL_EVENTS = True
+    REFRESH_CACHE = refresh
+    data_cache.configure(CACHE_ROOT)
+    event_cache.configure(CACHE_ROOT)
+
+    measurement = models.Measurement(filename=filename, path=path, point=point, entry=entry)
+    print(f"Fetching and cleaning events for {filename} (entry {entry}, point {point})...")
+    cache_path = ensure_events_download(measurement)
+    print(f"Success! Events persisted to {cache_path}")
+
+    if output:
+        import shutil
+        shutil.copyfile(cache_path, output)
+        print(f"Copied events+nexus file to {output}")
 
 def main():
     import argparse
@@ -541,6 +640,17 @@ def main():
     parser_rebin.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Event files are expected in <cache>/event_files.')
     parser_rebin.add_argument('--refresh', action='store_true', help='Force re-searching and re-downloading the nexus file even if already present in the cache.')
     parser_rebin.add_argument('--preview', action='store_true', help='Open the file in the GUI browser instead of processing locally')
+    parser_rebin.add_argument('--events-file', type=str, default=None, help='Reload cleaned events from a previously saved events+nexus file (see "save-events") instead of fetching them live.')
+
+    # --- Command: save-events ---
+    parser_save_events = subparsers.add_parser('save-events', help='Fetch, clean, and persist events for a measurement without binning.')
+    parser_save_events.add_argument('filename', type=str, help='Name of the nexus file (e.g., sans72222.nxs.ngv)')
+    parser_save_events.add_argument('--path', type=str, default='', help='Path to the data directory')
+    parser_save_events.add_argument('--point', type=int, default=0, help='Point index within the measurement (default: 0)')
+    parser_save_events.add_argument('--entry', type=int, default=0, help='Entry index within the nexus file (default: 0)')
+    parser_save_events.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Events are persisted to <cache>/events_cache.')
+    parser_save_events.add_argument('--refresh', action='store_true', help='Force re-fetching and re-cleaning events even if already cached.')
+    parser_save_events.add_argument('--output', type=str, default=None, help='Copy the resulting events+nexus file to this path.')
 
     args = parser.parse_args()
 
@@ -559,6 +669,7 @@ def main():
         USE_LOCAL_EVENTS = args.local_events
         REFRESH_CACHE = args.refresh
         data_cache.configure(CACHE_ROOT)
+        event_cache.configure(CACHE_ROOT)
 
         if args.preview:
             def wait_and_open():
@@ -606,7 +717,9 @@ def main():
     elif args.command == "check3":
         check3()
     elif args.command == "rebin":
-        cli_rebin(args.filename, args.path, args.interval, args.cache, args.refresh, args.preview)
+        cli_rebin(args.filename, args.path, args.interval, args.cache, args.refresh, args.preview, args.events_file)
+    elif args.command == "save-events":
+        cli_save_events(args.filename, args.path, args.point, args.entry, args.cache, args.refresh, args.output)
     else:
         parser.print_help()
 

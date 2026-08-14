@@ -25,6 +25,9 @@ dependencies = [
     "diskcache"
 ]
 
+[project.scripts]
+event-processing = "event_processing.rebinning_api.server:main"
+
 [project.optional-dependencies]
 dev = [
 ]
