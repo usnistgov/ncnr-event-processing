@@ -10,6 +10,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "h5py",
+    "hdf5plugin",
     "msgpack",
     "numpy",
     "pydantic",
