@@ -14,7 +14,8 @@ from importlib import resources
 
 #print(response.status_code)
 
-NEXUS_FOLDER = Path("cache/nexus_files").absolute()
+CACHE_ROOT = Path.cwd() / "cache" # default to current directory / cache
+NEXUS_FOLDER = (CACHE_ROOT / "nexus_files").absolute()
 METADATA_ENDPOINT = "https://charlotte.ncnr.nist.gov/ncnrdata/metadata/api/v1"
 METADATA_CERTFILE_NAME = "charlotte-ncnr-nist-gov-chain.pem"
 NCNRDATA_ENDPOINT = "https://ncnr.nist.gov/pub/ncnrdata/"
@@ -46,6 +47,7 @@ def cache_url(url, cachedir, filename=None, refresh=False):
         filename = url.rsplit('/', 1)[-1]
     cachedir.mkdir(parents=True, exist_ok=True)
     fullpath = cachedir / filename
+    print(f"getting file at fullpath {fullpath}")
     if refresh or not fullpath.exists():
         print(f"Fetching {url} into {filename}")
         r = requests.get(url)
@@ -55,9 +57,19 @@ def cache_url(url, cachedir, filename=None, refresh=False):
         #print(f"fetched {filename}")
     return fullpath
 
-def load_nexus(filename, datapath=None):
-    if datapath is None:
-        datapath = search_filename(filename)
-    url = nexus_url(datapath, filename)
-    fullpath = cache_url(url, NEXUS_FOLDER)
+def configure(cache_root):
+    """Set the base cache directory; nexus files are cached in <cache_root>/nexus_files."""
+    global CACHE_ROOT, NEXUS_FOLDER
+    CACHE_ROOT = Path(cache_root)
+    NEXUS_FOLDER = (CACHE_ROOT / "nexus_files").absolute()
+
+def load_nexus(filename, datapath=None, refresh=False):
+    fullpath = NEXUS_FOLDER / filename
+    if refresh or not fullpath.exists():
+        if datapath is None:
+            datapath = search_filename(filename)
+        url = nexus_url(datapath, filename)
+        fullpath = cache_url(url, NEXUS_FOLDER, filename=filename, refresh=refresh)
+    else:
+        print(f"Loading nexus file from cache: {fullpath}")
     return h5py.File(fullpath)
