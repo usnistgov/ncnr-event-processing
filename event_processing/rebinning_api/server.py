@@ -588,11 +588,11 @@ def cli_rebin(filename: str, path: str, interval: int, cache: str = None, refres
 
     print(f"Success! Rebinned file saved to ./{out_filename}")
 
-def cli_save_events(filename: str, path: str, point: int, entry: int, cache: str = None, refresh: bool = False, output: str = None):
+def cli_save_events(filename: str, path: str, point: int, entry: int, cache: str = None, refresh: bool = False, output: str = None, local_events: bool = False):
     """Handles the CLI execution for fetching, cleaning, and persisting events without binning."""
     global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE
     CACHE_ROOT = Path(cache) if cache else Path.cwd() / "cache"
-    USE_LOCAL_EVENTS = True
+    USE_LOCAL_EVENTS = local_events
     REFRESH_CACHE = refresh
     data_cache.configure(CACHE_ROOT)
     event_cache.configure(CACHE_ROOT)
@@ -651,6 +651,7 @@ def main():
     parser_save_events.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Events are persisted to <cache>/events_cache.')
     parser_save_events.add_argument('--refresh', action='store_true', help='Force re-fetching and re-cleaning events even if already cached.')
     parser_save_events.add_argument('--output', type=str, default=None, help='Copy the resulting events+nexus file to this path.')
+    parser_save_events.add_argument('--local-events', action='store_true', help='Read event data from pre-populated legacy .hst files in <cache>/event_files instead of fetching from the live kafka stream. Only works for older measurements that have an event_file_name recorded per detector.')
 
     args = parser.parse_args()
 
@@ -719,7 +720,7 @@ def main():
     elif args.command == "rebin":
         cli_rebin(args.filename, args.path, args.interval, args.cache, args.refresh, args.preview, args.events_file)
     elif args.command == "save-events":
-        cli_save_events(args.filename, args.path, args.point, args.entry, args.cache, args.refresh, args.output)
+        cli_save_events(args.filename, args.path, args.point, args.entry, args.cache, args.refresh, args.output, args.local_events)
     else:
         parser.print_help()
 
