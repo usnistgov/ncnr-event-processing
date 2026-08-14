@@ -9,4 +9,5 @@ CLEANUP_FNS = {
     'vsans': vsans_cleanup,
     'sans': sans_cleanup,
     'ngb30msans': sans_cleanup,
+    '10msans': sans_cleanup,
 }
