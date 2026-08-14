@@ -3,6 +3,7 @@ import logging
 import typing
 
 from .util import travel_time, FWHM_to_sigma
+from ..memlog import log_mem
 if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager, CleanedEvents
 
@@ -119,14 +120,11 @@ def calculate_pixel_distances(nxdetector, detector_name: str, dims):
     
     return pixel_distances
 
-def get_detector_ending(pixel_id):
+def get_detector_ending(orig_x):
     """
     Determines the detector_name ending ('R', 'T', 'B', 'L')
-    from a single encoded 'pixel_id' integer.
+    from a tube (x) index.
     """
-    # Extract orig_x (the higher 16 bits)
-    orig_x = pixel_id >> 16
-
     # Divide by 48 to find the offset chunk
     chunk_index = orig_x // 48
 
@@ -145,6 +143,16 @@ def get_detector_ending(pixel_id):
 
 ALL_DETECTORS = ["FR", "FT", "FB", "FL", "MR", "MT", "MB", "ML", "B"]
 
+def to_detector_indices(pixel_ids: np.ndarray):
+    x = pixel_ids >> 16
+    y = pixel_ids & 0xFFFF
+    return x, y
+
+def _concat_or_reuse(arrays: list[np.ndarray]) -> np.ndarray:
+    # np.concatenate always makes a copy, even for a single-element list.
+    # For large (>1e8 event) detectors avoid that redundant full-size copy
+    # in the common case where there is nothing to concatenate.
+    return arrays[0] if len(arrays) == 1 else np.concatenate(arrays)
 
 def cleanup(entry, raw_events: "EventsManager", datapath=""):
     make_table = False
@@ -167,14 +175,38 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     events = raw_events._fields.copy()
     detectors = events.setdefault('detectors', {})
     if make_table:
-        print(f"    # Table data extracted from {datapath}")
-        print(f"    # det  yrange   events =? integrated")
-    for k, (name, event_pairs) in enumerate(detector_partitions.items()):
+        logger.debug(f"    # Table data extracted from {datapath}")
+        logger.debug(f"    # det  yrange   events =? integrated")
+    # Iterate over a snapshot of the names only (not the (name, event_pairs)
+    # pairs themselves) so that each detector's raw arrays can be popped and
+    # freed as we finish with them. Without this, raw_events._fields,
+    # detector_partitions, and the "events" copy above all keep every
+    # detector's raw timestamp/pixel_id arrays alive for the whole loop (and
+    # raw_events outlives this function too), which roughly doubles peak
+    # memory at high (>1e8) event counts.
+    detector_names = list(detector_partitions.keys())
+    for k, name in enumerate(detector_names):
+        event_pairs = detector_partitions.pop(name)
         list_of_timestamp_arrays: list[np.ndarray] = event_pairs["timestamp"]
-        list_of_pixel_id_arrays: list[np.ndarray] = event_pairs["value"]
         # Concatenate the arrays into single arrays
-        times = np.concatenate(list_of_timestamp_arrays)
-        pixel_ids = np.concatenate(list_of_pixel_id_arrays)
+        times = _concat_or_reuse(list_of_timestamp_arrays)
+        if "x" in event_pairs:
+            # Already-split x/y, e.g. from a replayed .hst file where
+            # tubeID/pixel are stored as separate columns: use them directly
+            # rather than packing into a pixel_id here only to unpack again
+            # below.
+            orig_x = _concat_or_reuse(event_pairs["x"])
+            orig_y = _concat_or_reuse(event_pairs["y"])
+            pixel_ids = None
+        else:
+            # Live-stream format: a single packed pixel_id per event
+            # (tubeID << 16 | pixel), matching the kafka wire format.
+            pixel_ids = _concat_or_reuse(event_pairs["value"])
+            orig_x, orig_y = to_detector_indices(pixel_ids)
+        log_mem(f"concatenated {name}")
+        del event_pairs, list_of_timestamp_arrays
+        raw_events._fields.pop(name, None)
+        events.pop(name, None)
 
         # Determine the detector ending based on the first pixel
         if k == 8:
@@ -182,7 +214,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             detector_ending = "B"
             detector_name = "detector_B"
         else:
-            detector_ending = get_detector_ending(pixel_ids[0])
+            detector_ending = get_detector_ending(orig_x[0])
             detector_group = "F" if k < 4 else "M"
             detector_name = f"detector_{detector_group}{detector_ending}"
 
@@ -204,13 +236,23 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         logger.debug(f"detector {detector_name} distance: {distance}")
         logger.debug(f"distance table: min={distance_table.min()} max={distance_table.max()}")
 
-        orig_x, orig_y = pixel_ids >> 16, pixel_ids & 0xFFFF
+        # x/y (and the raw pixel coordinates they're derived from) never
+        # exceed a detector's own dims, so pick the smallest unsigned type
+        # that fits: the front/middle quadrant detectors are at most 192x128
+        # and fit in a single byte, but detector_B is far larger (e.g.
+        # 680x1656) and needs more room. Casting down from int64 here keeps
+        # every array downstream (and the sort reorder below) a fraction of
+        # the size, which matters a lot at >1e8 events.
+        coord_dtype = np.uint8 if max(dims) <= 0xFF else np.uint16
+        orig_x = orig_x.astype(coord_dtype, copy=False)
+        orig_y = orig_y.astype(coord_dtype, copy=False)
+        log_mem(f"extracted orig_x/orig_y {name}")
         # x, y = pixels >> 16, pixels & 0xFFFF
         if make_table:
-            num_events = len(pixel_ids)
+            num_events = len(orig_x)
             counts = nxdetector["integrated_count"][0]
             match = "yes" if counts == num_events else "NO!!!"
-            print(f"    # {k}:{name} {x.min():3d}:{x.max():<3d} {num_events:7d} =? {counts:<7d} {match}")
+            logger.debug(f"    # {k}:{name} {x.min():3d}:{x.max():<3d} {num_events:7d} =? {counts:<7d} {match}")
             #print("  x", x)
             #print("  y", y)
         if detector_name == "detector_B": # swapaxes
@@ -226,36 +268,73 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         else:
             raise ValueError(f"Unknown detector {name}, should be in FR FT FB FL MB MR ML MT R")
         #print(f"{k}:{name} {dims=} y:{y.min()}-{y.max():<3} x:{x.min()}-{x.max():<3}")
-        if not ((y>=0).all() and (y<dims[1]).all() and (x>=0).all() and (x<dims[0]).all()):
+        # x/y are coord_dtype (unsigned), so x>=0/y>=0 are always true and
+        # can't catch anything (an underflowed subtraction above would wrap
+        # to a large unsigned value, not go negative) - just check the upper
+        # bound, and with .max() instead of a full-array comparison + .all()
+        # so this doesn't allocate an event-count-sized temp array.
+        if not (y.max() < dims[1] and x.max() < dims[0]):
             # find bad pixels:
             bad_x = np.where((x < 0) | (x >= dims[0]))[0]
             bad_y = np.where((y < 0) | (y >= dims[1]))[0]
             bad = np.union1d(bad_x, bad_y)
-            logging.error(f"Bad pixels in {detector_name}: x={x[bad]}, orig_x={orig_x[bad]}, y={y[bad]}, orig_y={orig_y[bad]}, pixel_ids={pixel_ids[bad]}")
+            pixel_id_note = f", pixel_ids={pixel_ids[bad]}" if pixel_ids is not None else ""
+            logging.error(f"Bad pixels in {detector_name}: x={x[bad]}, orig_x={orig_x[bad]}, y={y[bad]}, orig_y={orig_y[bad]}{pixel_id_note}")
             raise RuntimeError(f"Bad pixel id in {datapath} for detector {detector_name}")
+        # orig_x/orig_y/pixel_ids are only needed above for the bad-pixel
+        # check; drop them now rather than holding onto them (plus the
+        # aliasing above means x or y may equal orig_x/orig_y, so this only
+        # releases the *names*, not any array still in use).
+        del orig_x, orig_y, pixel_ids
         #print(f"times: {times.min()}:{times.max()} relative to {start}")
         #print(f"subtracting {start} from {times[0]} = {times[0]-start}")
 
-        pixel_dists = distance_table[x, y]
-        
-        # 3. Calculate corrected times per event using vectorization
-        time_correction = travel_time(pixel_dists, wavelength)
-        time_correction_sigma = time_correction * wavelength_spread_FWHM * FWHM_to_sigma
+        # travel_time is a per-element scaling of distance by a constant that
+        # depends only on wavelength, not on x/y, so it commutes with the
+        # gather below: apply it to the small distance_table first and then
+        # gather with x/y, instead of gathering distance_table into an
+        # event-count-sized pixel_dists array and scaling that. Saves one
+        # full event-count-sized array entirely.
+        #
+        # Floor and cast to int64 here too, while it's still dims-sized
+        # (a few thousand pixels) instead of event-count-sized: floor and
+        # gather commute exactly (floor(table)[x, y] == floor(table[x, y])),
+        # so this is a cheap O(pixels) floor instead of an O(events) one, and
+        # time_correction comes out of the gather already int64, so the
+        # subtraction below needs no casting at all. Tradeoff: mean/max/min
+        # below are now computed from the floored per-pixel values, which
+        # gives mean a small systematic (~1ns, always-downward) bias versus
+        # computing it from the exact float travel times; max/min are
+        # unaffected since floor doesn't change which pixel is largest/smallest.
+        travel_time_table = np.floor(travel_time(distance_table, wavelength)).astype(np.int64)
+        time_correction = travel_time_table[x, y]
+        log_mem(f"calculated time correction {name}")
+        # ts_sigma would be time_correction * wavelength_spread_FWHM * FWHM_to_sigma,
+        # but mean/max/min all commute with scaling by a positive constant, so
+        # compute the stats on time_correction directly and scale the resulting
+        # scalars instead of materializing another event-count-sized array just
+        # to summarize and immediately discard it.
+        sigma_factor = wavelength_spread_FWHM * FWHM_to_sigma
+        ts_sigma_stats = {
+            "mean": time_correction.mean() * sigma_factor,
+            "max": int(time_correction.max() * sigma_factor),
+            "min": int(time_correction.min() * sigma_factor),
+        }
 
-        times -= start + time_correction.astype(int)
-        ts_sigma = time_correction_sigma.astype(int)
+        times -= time_correction
+        del time_correction
+        times -= start
+        log_mem(f"corrected times {name}")
 
         # Sort by time
         index = np.argsort(times, kind="stable")
+        log_mem(f"sorted {name}")
         times = times[index]
+        log_mem(f"reordered times {name}")
         x = x[index]
         y = y[index]
-        ts_sigma_stats = {
-            "mean": ts_sigma.mean(),
-            "std": ts_sigma.std(),
-            "max": ts_sigma.max(),
-            "min": ts_sigma.min(),
-        }
+        del index
+        log_mem(f"reordered x and y {name}")
 
         # shave bits
         if AUTO_BIT_SHAVING and ts_sigma_stats["min"] > 1:
@@ -264,7 +343,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             sigma_bits = int(np.log2(ts_sigma_stats["min"]))
             bits_to_shave = max(0, sigma_bits - EXTRA_BITS)
             if bits_to_shave > 0:
-                print(f"Shaving {bits_to_shave} bits from ts_sigma, because minimum is {ts_sigma_stats['min']}")
+                logger.debug(f"Shaving {bits_to_shave} bits from ts_sigma, because minimum is {ts_sigma_stats['min']}")
             
                 # 3. Bit Shave: Shift right to drop the lowest bits, then left to restore magnitude
                 # Example: 101101 >> 3 = 101; 101 << 3 = 101000
