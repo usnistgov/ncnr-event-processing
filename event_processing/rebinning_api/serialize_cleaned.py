@@ -28,12 +28,18 @@ def write_cleaned_events(group: "h5py.Group", cleaned_fields: dict, meta: dict |
                 det_data = data[det_key]
                 for subkey in ['ts']:  # was ['ts', 'ts_sigma']
                     subval = np.array(det_data[subkey], dtype='int64') if np.isscalar(det_data[subkey]) else det_data[subkey]
-                    chunk_size = min(125000, len(subval))
-                    det_group.create_dataset(subkey, chunks=(chunk_size,), dtype='int64', data=subval, **hdf5plugin.Blosc(cname='lz4', shuffle=hdf5plugin.Blosc.BITSHUFFLE))
+                    if len(subval) == 0:
+                        det_group.create_dataset(subkey, dtype='int64', data=subval)
+                    else:
+                        chunk_size = min(125000, len(subval))
+                        det_group.create_dataset(subkey, chunks=(chunk_size,), dtype='int64', data=subval, **hdf5plugin.Blosc(cname='lz4', shuffle=hdf5plugin.Blosc.BITSHUFFLE))
                 for subkey in ['x', 'y']:
                     subval = np.array(det_data[subkey], dtype='int16') if np.isscalar(det_data[subkey]) else det_data[subkey]
-                    chunk_size = min(125000, len(subval))
-                    det_group.create_dataset(subkey, chunks=(chunk_size,), dtype='int16', data=subval, **hdf5plugin.Blosc(cname='lz4', shuffle=hdf5plugin.Blosc.BITSHUFFLE))
+                    if len(subval) == 0:
+                        det_group.create_dataset(subkey, dtype='int16', data=subval)
+                    else:
+                        chunk_size = min(125000, len(subval))
+                        det_group.create_dataset(subkey, chunks=(chunk_size,), dtype='int16', data=subval, **hdf5plugin.Blosc(cname='lz4', shuffle=hdf5plugin.Blosc.BITSHUFFLE))
                 det_group.attrs['dims'] = det_data['dims']
                 if 'ts_sigma_stats' in det_data:
                     stats_group = det_group.create_group('ts_sigma_stats')
