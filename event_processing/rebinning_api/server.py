@@ -292,7 +292,7 @@ def get_nexus(measurement: models.Measurement, bins):
     return data
 
 
-def bin_events(measurement: models.Measurement, bins, summary=False):
+def bin_events(measurement: models.Measurement, bins: models.TimeBins, summary=False):
     from timeit import default_timer as tic; T0 = tic()
     if bins.mode != "time":
         raise NotImplementedError("only time-mode binning implemented for now")
