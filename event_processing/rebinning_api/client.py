@@ -77,7 +77,7 @@ def get_nexus(metadata, bins):
     return models.NexusReply(**reply)
 
 
-def time_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=0):
+def time_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0):
     # TODO: not sure if it is a good idea to make time bins contingent on mask
     # Reasons against: if you are applying the same bins across a number of
     # measurements but one of them has a bad region of data, you don't want the
@@ -93,7 +93,9 @@ def time_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=
             start = mask_start
         if end is None:
             end = mask_end
-    edges = _lin_edges(metadata.duration, start, end, interval)
+    if interval is None and nbins is None:
+        nbins = 10
+    edges = _lin_edges(metadata.duration, start, end, interval, nbins)
     bins = models.TimeBins(edges=edges, mask=mask)
     return bins
 

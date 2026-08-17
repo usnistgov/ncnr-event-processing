@@ -548,7 +548,7 @@ To run the actual server for responding to web requests use uvicorn:
     uvicorn event_processing.rebinning_api.server:app
 """
 
-def cli_rebin(filename: str, path: str, interval: int, cache: str = None, refresh: bool = False, preview: bool = False, events_file: str = None, hst_files: list[str] = None):
+def cli_rebin(filename: str, path: str, interval: int = None, nbins: int = None, cache: str = None, refresh: bool = False, preview: bool = False, events_file: str = None, hst_files: list[str] = None):
     """Handles the CLI execution for rebinning or launching the preview."""
     if preview:
         import webbrowser
@@ -576,8 +576,11 @@ def cli_rebin(filename: str, path: str, interval: int, cache: str = None, refres
     print("Fetching metadata...")
     metadata = get_metadata(measurement)
 
-    print(f"Generating bins with interval {interval}...")
-    bins = client.time_linbins(metadata, interval=interval)
+    if interval is not None:
+        print(f"Generating bins with interval {interval}...")
+    else:
+        print(f"Generating {nbins or 10} bins...")
+    bins = client.time_linbins(metadata, interval=interval, nbins=nbins)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
 
     print("Processing events and generating Nexus file (this may take a moment)...")
@@ -643,7 +646,9 @@ def main():
     parser_rebin = subparsers.add_parser('rebin', help='Rebin a file directly from the CLI.')
     parser_rebin.add_argument('filename', type=str, help='Name of the nexus file (e.g., sans72222.nxs.ngv)')
     parser_rebin.add_argument('--path', type=str, default='', help='Path to the data directory')
-    parser_rebin.add_argument('--interval', type=int, default=500, help='Bin interval (default: 500)')
+    parser_rebin_bins = parser_rebin.add_mutually_exclusive_group()
+    parser_rebin_bins.add_argument('--interval', type=int, default=None, help='Bin interval.')
+    parser_rebin_bins.add_argument('--nbins', type=int, default=None, help='Number of bins (default: 10, used when neither --interval nor --nbins is given).')
     parser_rebin.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Event files are expected in <cache>/hst_files.')
     parser_rebin.add_argument('--refresh', action='store_true', help='Force re-searching and re-downloading the nexus file even if already present in the cache.')
     parser_rebin.add_argument('--preview', action='store_true', help='Open the file in the GUI browser instead of processing locally')
@@ -727,7 +732,7 @@ def main():
     elif args.command == "check3":
         check3()
     elif args.command == "rebin":
-        cli_rebin(args.filename, args.path, args.interval, args.cache, args.refresh, args.preview, args.events_file, args.hst_files)
+        cli_rebin(args.filename, args.path, args.interval, args.nbins, args.cache, args.refresh, args.preview, args.events_file, args.hst_files)
     elif args.command == "save-events":
         cli_save_events(args.filename, args.path, args.point, args.entry, args.cache, args.refresh, args.output, args.local_events, args.hst_files)
     else:
