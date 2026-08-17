@@ -66,7 +66,7 @@ def configure(cache_root):
 def load_nexus(filename, datapath=None, refresh=False):
     fullpath = NEXUS_FOLDER / filename
     if refresh or not fullpath.exists():
-        if datapath is None:
+        if not datapath:
             datapath = search_filename(filename)
         url = nexus_url(datapath, filename)
         fullpath = cache_url(url, NEXUS_FOLDER, filename=filename, refresh=refresh)
