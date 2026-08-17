@@ -404,15 +404,12 @@ def bin_events(measurement: models.Measurement, bins: models.TimeBins, summary=F
         try:
             # CRUFT: we are allowing some old vsans histograms to run for demo purposes.
             # Skipped when reading events from a local cache, since that path already
-            # handles old-format vsans files via the full event_cleanup/binning pipeline.
-            if not USE_LOCAL_EVENTS and measurement.filename.startswith('sans') and measurement.filename < "sans72000":
-                result = _bin_by_time_old_vsans(entry, bins)
-            else:
-                events = ensure_cleaned_events(measurement, entry)
-                print(f"{tic()-T0:.6f}: binning")
-                result = binning.bin(entry, measurement.point, bins, events)
-                print(f"{tic()-T0:.6f}: binned")
-                #binned = _bin_by_time(entry, events, bins)
+            # handles old-format vsans files via the full event_cleanup/binning pipeline.            
+            events = ensure_cleaned_events(measurement, entry)
+            print(f"{tic()-T0:.6f}: binning")
+            result = binning.bin(entry, measurement.point, bins, events)
+            print(f"{tic()-T0:.6f}: binned")
+            #binned = _bin_by_time(entry, events, bins)
         finally:
             entry.file.close()
         CACHE[binned_key] = result
