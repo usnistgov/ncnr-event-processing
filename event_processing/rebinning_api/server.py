@@ -52,7 +52,7 @@ EVENTS_FILE_OVERRIDE: Path | None = None
 # repeatable), local .hst event files are loaded from these explicit paths
 # instead of being auto-discovered via the nexus entry's recorded
 # eventFileName. Takes priority over AUTO_HST_FILE auto-discovery.
-LOCAL_EVENT_FILE_PATHS: list[Path] | None = None
+LOCAL_HST_FILES: list[Path] | None = None
 CACHE_VERSION = "0.2"
 CACHE_SIZE = int(100e9) # 100 GB
 CACHE_ITEMS = 100 # max number of items, if not using items size in cache
@@ -283,15 +283,19 @@ async def download_nexus_form(request_str: Annotated[str, Form()], download_id: 
         raise e
 
 
-def ensure_events_download(measurement: models.Measurement) -> Path:
+def ensure_events_download(measurement: models.Measurement, hst_files: list[Path] | None = None) -> Path:
     """
     Helper for the events download endpoint: makes sure the on-disk
     events-cache copy of the nexus file has this measurement's cleaned
     events persisted, and returns its path.
+
+    hst_files overrides the LOCAL_HST_FILES global for this call only
+    (see ensure_cleaned_events) -- lets scripts/notebooks pass explicit
+    .hst paths without touching global state.
     """
     entry = nexus_util.open_nexus_entry(measurement, refresh=REFRESH_CACHE)
     try:
-        ensure_cleaned_events(measurement, entry)
+        ensure_cleaned_events(measurement, entry, hst_files=hst_files)
     finally:
         entry.file.close()
     return event_cache.events_cache_path(measurement.filename)
@@ -359,12 +363,17 @@ def get_nexus(measurement: models.Measurement, bins):
     return data
 
 
-def ensure_cleaned_events(measurement: models.Measurement, entry):
+def ensure_cleaned_events(measurement: models.Measurement, entry, hst_files: list[Path] | None = None):
     """
     Return cleaned (time-of-flight corrected) events for measurement+entry,
     loading them from the on-disk events cache if already persisted there,
     or fetching and cleaning them from the raw source (kafka / local event
     files) and persisting the result otherwise.
+
+    hst_files, when given, takes priority over the AUTO_HST_FILE / live-kafka
+    fallback, same as LOCAL_HST_FILES (the global that "serve" and
+    "rebin" populate from their own --hst-file CLI flag ahead of time, since
+    there's no per-request way to pass it through the web API).
     """
     from timeit import default_timer as tic; T0 = tic()
     events = None
@@ -376,9 +385,11 @@ def ensure_cleaned_events(measurement: models.Measurement, entry):
     if events is not None:
         return events
 
-    if LOCAL_EVENT_FILE_PATHS:
-        print(f"{tic()-T0:.6f}: loading events from {LOCAL_EVENT_FILE_PATHS}")
-        raw_events = rebin_vsans_old.events_manager_from_paths(entry, LOCAL_EVENT_FILE_PATHS)
+    if hst_files is None:
+        hst_files = LOCAL_HST_FILES
+    if hst_files:
+        print(f"{tic()-T0:.6f}: loading events from {hst_files}")
+        raw_events = rebin_vsans_old.events_manager_from_paths(entry, hst_files)
     elif AUTO_HST_FILE:
         events_folder = CACHE_ROOT / "hst_files"
         print(f"{tic()-T0:.6f}: loading events from {events_folder}")
@@ -550,12 +561,12 @@ To run the actual server for responding to web requests use uvicorn:
 
 def configure_data_source(cache: str = None, refresh: bool = False, auto_hst_file: bool = False, hst_files: list[str] = None, events_file: str = None):
     """Configure the global cache/event-source state shared by every CLI action that reads nexus/event data (serve, rebin, save-events)."""
-    global CACHE_ROOT, AUTO_HST_FILE, REFRESH_CACHE, EVENTS_FILE_OVERRIDE, LOCAL_EVENT_FILE_PATHS
+    global CACHE_ROOT, AUTO_HST_FILE, REFRESH_CACHE, EVENTS_FILE_OVERRIDE, LOCAL_HST_FILES
     CACHE_ROOT = Path(cache) if cache else Path.cwd() / "cache"
     AUTO_HST_FILE = auto_hst_file
     REFRESH_CACHE = refresh
     EVENTS_FILE_OVERRIDE = Path(events_file) if events_file else None
-    LOCAL_EVENT_FILE_PATHS = [Path(p) for p in hst_files] if hst_files else None
+    LOCAL_HST_FILES = [Path(p) for p in hst_files] if hst_files else None
     data_cache.configure(CACHE_ROOT)
     event_cache.configure(CACHE_ROOT)
 
@@ -601,11 +612,12 @@ def cli_rebin(filename: str, path: str, cache: str = None, refresh: bool = False
 
 def cli_save_events(filename: str, path: str, cache: str = None, refresh: bool = False, auto_hst_file: bool = False, hst_files: list[str] = None, point: int = 0, entry: int = 0, output: str = None):
     """Handles the CLI execution for fetching, cleaning, and persisting events without binning."""
-    configure_data_source(cache, refresh, auto_hst_file, hst_files)
+    configure_data_source(cache, refresh, auto_hst_file)
+    hst_paths = [Path(p) for p in hst_files] if hst_files else None
 
     measurement = models.Measurement(filename=filename, path=path, point=point, entry=entry)
     print(f"Fetching and cleaning events for {filename} (entry {entry}, point {point})...")
-    cache_path = ensure_events_download(measurement)
+    cache_path = ensure_events_download(measurement, hst_files=hst_paths)
     print(f"Success! Events persisted to {cache_path}")
 
     if output:
