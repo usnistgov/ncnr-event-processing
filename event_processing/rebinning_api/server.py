@@ -37,10 +37,10 @@ CACHE_PATH = "/tmp/event-processing"
 # <CACHE_ROOT>/nexus_files, event files in <CACHE_ROOT>/hst_files, and
 # persisted cleaned events live in <CACHE_ROOT>/events_cache.
 CACHE_ROOT: Path = Path.cwd() / "cache"
-# When True (via "serve --local-events" or the "rebin" CLI command), events
-# are read from local .hst files under CACHE_ROOT / "hst_files" instead of
-# being fetched from the live kafka stream.
-USE_LOCAL_EVENTS: bool = False
+# When True (via "--auto-hst-file"), events are read from local .hst files
+# under CACHE_ROOT / "hst_files" instead of being fetched from the live
+# kafka stream.
+AUTO_HST_FILE: bool = False
 # When True, nexus files are re-searched and re-downloaded even if already
 # present in CACHE_ROOT / "nexus_files".
 REFRESH_CACHE: bool = False
@@ -51,7 +51,7 @@ EVENTS_FILE_OVERRIDE: Path | None = None
 # When set (via "rebin --event-file" / "save-events --event-file",
 # repeatable), local .hst event files are loaded from these explicit paths
 # instead of being auto-discovered via the nexus entry's recorded
-# eventFileName. Takes priority over USE_LOCAL_EVENTS auto-discovery.
+# eventFileName. Takes priority over AUTO_HST_FILE auto-discovery.
 LOCAL_EVENT_FILE_PATHS: list[Path] | None = None
 CACHE_VERSION = "0.2"
 CACHE_SIZE = int(100e9) # 100 GB
@@ -379,7 +379,7 @@ def ensure_cleaned_events(measurement: models.Measurement, entry):
     if LOCAL_EVENT_FILE_PATHS:
         print(f"{tic()-T0:.6f}: loading events from {LOCAL_EVENT_FILE_PATHS}")
         raw_events = rebin_vsans_old.events_manager_from_paths(entry, LOCAL_EVENT_FILE_PATHS)
-    elif USE_LOCAL_EVENTS:
+    elif AUTO_HST_FILE:
         events_folder = CACHE_ROOT / "hst_files"
         print(f"{tic()-T0:.6f}: loading events from {events_folder}")
         raw_events = rebin_vsans_old.events_manager_from_files(entry, events_folder=events_folder)
@@ -548,7 +548,18 @@ To run the actual server for responding to web requests use uvicorn:
     uvicorn event_processing.rebinning_api.server:app
 """
 
-def cli_rebin(filename: str, path: str, interval: int = None, nbins: int = None, cache: str = None, refresh: bool = False, preview: bool = False, events_file: str = None, hst_files: list[str] = None):
+def configure_data_source(cache: str = None, refresh: bool = False, auto_hst_file: bool = False, hst_files: list[str] = None, events_file: str = None):
+    """Configure the global cache/event-source state shared by every CLI action that reads nexus/event data (serve, rebin, save-events)."""
+    global CACHE_ROOT, AUTO_HST_FILE, REFRESH_CACHE, EVENTS_FILE_OVERRIDE, LOCAL_EVENT_FILE_PATHS
+    CACHE_ROOT = Path(cache) if cache else Path.cwd() / "cache"
+    AUTO_HST_FILE = auto_hst_file
+    REFRESH_CACHE = refresh
+    EVENTS_FILE_OVERRIDE = Path(events_file) if events_file else None
+    LOCAL_EVENT_FILE_PATHS = [Path(p) for p in hst_files] if hst_files else None
+    data_cache.configure(CACHE_ROOT)
+    event_cache.configure(CACHE_ROOT)
+
+def cli_rebin(filename: str, path: str, cache: str = None, refresh: bool = False, auto_hst_file: bool = False, hst_files: list[str] = None, preview: bool = False, interval: int = None, nbins: int = None, events_file: str = None):
     """Handles the CLI execution for rebinning or launching the preview."""
     if preview:
         import webbrowser
@@ -558,16 +569,7 @@ def cli_rebin(filename: str, path: str, interval: int = None, nbins: int = None,
         webbrowser.open(url)
         return
 
-    # Headless execution: read events from a local cache instead of the
-    # live kafka stream.
-    global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE, EVENTS_FILE_OVERRIDE, LOCAL_EVENT_FILE_PATHS
-    CACHE_ROOT = Path(cache) if cache else Path.cwd() / "cache"
-    USE_LOCAL_EVENTS = True
-    REFRESH_CACHE = refresh
-    EVENTS_FILE_OVERRIDE = Path(events_file) if events_file else None
-    LOCAL_EVENT_FILE_PATHS = [Path(p) for p in hst_files] if hst_files else None
-    data_cache.configure(CACHE_ROOT)
-    event_cache.configure(CACHE_ROOT)
+    configure_data_source(cache, refresh, auto_hst_file, hst_files, events_file)
 
     from . import client
     print(f"Loading measurement for {filename}...")
@@ -597,15 +599,9 @@ def cli_rebin(filename: str, path: str, interval: int = None, nbins: int = None,
 
     print(f"Success! Rebinned file saved to ./{out_filename}")
 
-def cli_save_events(filename: str, path: str, point: int, entry: int, cache: str = None, refresh: bool = False, output: str = None, local_events: bool = False, hst_files: list[str] = None):
+def cli_save_events(filename: str, path: str, cache: str = None, refresh: bool = False, auto_hst_file: bool = False, hst_files: list[str] = None, point: int = 0, entry: int = 0, output: str = None):
     """Handles the CLI execution for fetching, cleaning, and persisting events without binning."""
-    global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE, LOCAL_EVENT_FILE_PATHS
-    CACHE_ROOT = Path(cache) if cache else Path.cwd() / "cache"
-    USE_LOCAL_EVENTS = local_events
-    REFRESH_CACHE = refresh
-    LOCAL_EVENT_FILE_PATHS = [Path(p) for p in hst_files] if hst_files else None
-    data_cache.configure(CACHE_ROOT)
-    event_cache.configure(CACHE_ROOT)
+    configure_data_source(cache, refresh, auto_hst_file, hst_files)
 
     measurement = models.Measurement(filename=filename, path=path, point=point, entry=entry)
     print(f"Fetching and cleaning events for {filename} (entry {entry}, point {point})...")
@@ -622,16 +618,23 @@ def main():
     parser = argparse.ArgumentParser(description='Event processing server and CLI utilities.')
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
+    # --- Shared argument groups, applicable to any command that reads
+    # nexus/event data (serve, rebin, save-events) ---
+    data_source_args = argparse.ArgumentParser(add_help=False)
+    data_source_args.add_argument('--path', type=str, default='', help='Path to the data directory.')
+    data_source_args.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Nexus files are cached in <cache>/nexus_files; cleaned events are persisted to <cache>/events_cache; event files are read from <cache>/hst_files when local events are used.')
+    data_source_args.add_argument('--refresh', action='store_true', help='Force re-searching/re-downloading/re-fetching data even if already present in the cache.')
+    data_source_args.add_argument('--auto-hst-file', action='store_true', default=False, help='Automatically read event data from pre-populated files in <cache>/hst_files instead of the live kafka stream.')
+    data_source_args.add_argument('--hst-file', dest='hst_files', action='append', default=None, metavar='PATH', help='Explicit path to a local .hst event file, bypassing nexus-based auto-discovery of event files by name. Repeat for VSANS (once for the front carriage, once for the middle carriage); pass once for SANS. Takes priority over --auto-hst-file auto-discovery.')
+
+    preview_args = argparse.ArgumentParser(add_help=False)
+    preview_args.add_argument('--preview', action='store_true', help='Open the result in the GUI browser.')
+
     # --- Command: serve ---
-    parser_serve = subparsers.add_parser('serve', help='Start the FastAPI backend server.')
+    parser_serve = subparsers.add_parser('serve', parents=[data_source_args, preview_args], help='Start the FastAPI backend server.')
     parser_serve.add_argument('--host', type=str, default='127.0.0.1', help='Host IP address to bind to.')
     parser_serve.add_argument('--port', type=int, default=8000, help='Port to bind to (default: 8000).')
     parser_serve.add_argument('--filename', type=str, help='Filename to pre-load in the GUI on startup.')
-    parser_serve.add_argument('--path', type=str, default='', help='Path to the data directory.')
-    parser_serve.add_argument('--preview', action='store_true', help='Open the GUI in the browser once the server starts.')
-    parser_serve.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Nexus files are cached in <cache>/nexus_files; event files are read from <cache>/hst_files when --local-events is set.')
-    parser_serve.add_argument('--local-events', action='store_true', help='Read event data from pre-populated files in <cache>/hst_files instead of the live kafka stream.')
-    parser_serve.add_argument('--refresh', action='store_true', help='Force re-searching and re-downloading nexus files even if already present in the cache.')
 
     # --- Command: clear ---
     subparsers.add_parser('clear', help='Empties any caches associated with the data.')
@@ -643,29 +646,19 @@ def main():
     subparsers.add_parser('check3', help='Run check3 diagnostic.')
 
     # --- Command: rebin ---
-    parser_rebin = subparsers.add_parser('rebin', help='Rebin a file directly from the CLI.')
+    parser_rebin = subparsers.add_parser('rebin', parents=[data_source_args, preview_args], help='Rebin a file directly from the CLI.')
     parser_rebin.add_argument('filename', type=str, help='Name of the nexus file (e.g., sans72222.nxs.ngv)')
-    parser_rebin.add_argument('--path', type=str, default='', help='Path to the data directory')
     parser_rebin_bins = parser_rebin.add_mutually_exclusive_group()
     parser_rebin_bins.add_argument('--interval', type=int, default=None, help='Bin interval.')
     parser_rebin_bins.add_argument('--nbins', type=int, default=None, help='Number of bins (default: 10, used when neither --interval nor --nbins is given).')
-    parser_rebin.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Event files are expected in <cache>/hst_files.')
-    parser_rebin.add_argument('--refresh', action='store_true', help='Force re-searching and re-downloading the nexus file even if already present in the cache.')
-    parser_rebin.add_argument('--preview', action='store_true', help='Open the file in the GUI browser instead of processing locally')
     parser_rebin.add_argument('--events-file', type=str, default=None, help='Reload cleaned events from a previously saved events+nexus file (see "save-events") instead of fetching them live.')
-    parser_rebin.add_argument('--hst-file', dest='hst_files', action='append', default=None, metavar='PATH', help='Explicit path to a local .hst event file, bypassing nexus-based auto-discovery of event files by name. Repeat for VSANS (once for the front carriage, once for the middle carriage); pass once for SANS. Takes priority over --local-events auto-discovery.')
 
     # --- Command: save-events ---
-    parser_save_events = subparsers.add_parser('save-events', help='Fetch, clean, and persist events for a measurement without binning.')
+    parser_save_events = subparsers.add_parser('save-events', parents=[data_source_args], help='Fetch, clean, and persist events for a measurement without binning.')
     parser_save_events.add_argument('filename', type=str, help='Name of the nexus file (e.g., sans72222.nxs.ngv)')
-    parser_save_events.add_argument('--path', type=str, default='', help='Path to the data directory')
     parser_save_events.add_argument('--point', type=int, default=0, help='Point index within the measurement (default: 0)')
     parser_save_events.add_argument('--entry', type=int, default=0, help='Entry index within the nexus file (default: 0)')
-    parser_save_events.add_argument('--cache', type=str, default=None, help='Base folder for the local cache (default: ./cache). Events are persisted to <cache>/events_cache.')
-    parser_save_events.add_argument('--refresh', action='store_true', help='Force re-fetching and re-cleaning events even if already cached.')
     parser_save_events.add_argument('--output', type=str, default=None, help='Copy the resulting events+nexus file to this path.')
-    parser_save_events.add_argument('--local-events', action='store_true', help='Read event data from pre-populated legacy .hst files in <cache>/hst_files instead of fetching from the live kafka stream. Only works for older measurements that have an event_file_name recorded per detector.')
-    parser_save_events.add_argument('--hst-file', dest='hst_files', action='append', default=None, metavar='PATH', help='Explicit path to a local .hst event file, bypassing nexus-based auto-discovery of event files by name. Repeat for VSANS (once for the front carriage, once for the middle carriage); pass once for SANS. Takes priority over --local-events auto-discovery.')
 
     args = parser.parse_args()
 
@@ -679,12 +672,7 @@ def main():
 
         print(f"args: {args}")
 
-        global CACHE_ROOT, USE_LOCAL_EVENTS, REFRESH_CACHE
-        CACHE_ROOT = Path(args.cache) if args.cache else Path.cwd() / "cache"
-        USE_LOCAL_EVENTS = args.local_events
-        REFRESH_CACHE = args.refresh
-        data_cache.configure(CACHE_ROOT)
-        event_cache.configure(CACHE_ROOT)
+        configure_data_source(args.cache, args.refresh, args.auto_hst_file, args.hst_files)
 
         if args.preview:
             def wait_and_open():
@@ -732,9 +720,12 @@ def main():
     elif args.command == "check3":
         check3()
     elif args.command == "rebin":
-        cli_rebin(args.filename, args.path, args.interval, args.nbins, args.cache, args.refresh, args.preview, args.events_file, args.hst_files)
+        cli_rebin(args.filename, args.path, cache=args.cache, refresh=args.refresh, auto_hst_file=args.auto_hst_file,
+                  hst_files=args.hst_files, preview=args.preview, interval=args.interval, nbins=args.nbins,
+                  events_file=args.events_file)
     elif args.command == "save-events":
-        cli_save_events(args.filename, args.path, args.point, args.entry, args.cache, args.refresh, args.output, args.local_events, args.hst_files)
+        cli_save_events(args.filename, args.path, cache=args.cache, refresh=args.refresh, auto_hst_file=args.auto_hst_file,
+                         hst_files=args.hst_files, point=args.point, entry=args.entry, output=args.output)
     else:
         parser.print_help()
 
