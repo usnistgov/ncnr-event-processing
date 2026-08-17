@@ -106,8 +106,6 @@ def events_manager_from_files(entry, events_folder=EVENTS_FOLDER):
     Raises FileNotFoundError if the event files referenced by the nexus
     entry are not present in events_folder.
     """
-    from .event_capture import EventsManager
-
     events_folder = Path(events_folder)
     paths = find_event_files(entry, events_folder=events_folder)
     missing = [str(p) for p in paths if not p.exists()]
@@ -115,6 +113,23 @@ def events_manager_from_files(entry, events_folder=EVENTS_FOLDER):
         raise FileNotFoundError(
             f"No event files found: {', '.join(missing)} (looked in {events_folder})"
         )
+    return events_manager_from_paths(entry, paths)
+
+
+def events_manager_from_paths(entry, paths):
+    """
+    Build an EventsManager populated from explicit local .hst event file
+    paths, bypassing nexus-based auto-discovery. Pass one path for SANS, or
+    two paths (front/middle carriage) for VSANS.
+
+    Raises FileNotFoundError if any of the given paths don't exist.
+    """
+    from .event_capture import EventsManager
+
+    paths = [Path(p) for p in paths]
+    missing = [str(p) for p in paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"No event files found: {', '.join(missing)}")
 
     db = EventsManager(None)
     # Legacy event timestamps are ticks from the start of the count, so

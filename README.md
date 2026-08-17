@@ -28,7 +28,7 @@ Installing the package registers an `event-processing` command (equivalent to
 a measurement without going through the web service.
 
 Rebin a file directly, reading events from the live source (or from local
-`.hst` files under `<cache>/event_files`, and writing the rebinned NeXus file
+`.hst` files under `<cache>/hst_files`, and writing the rebinned NeXus file
 to the current directory:
 ```sh
 event-processing rebin sans72222.nxs.ngv \
@@ -52,7 +52,9 @@ event-processing save-events sans72222.nxs.ngv \
     --point 0 --entry 0 --output sans72222_events.nxs.ngv
 ```
 Add `--refresh` to force re-fetching and re-cleaning even if events are
-already cached.
+already cached. By default this fetches raw events from the live kafka
+stream; pass `--local-events` instead for older measurements whose events
+were recorded to legacy `.hst` files under `<cache>/hst_files`.
 
 The saved events+NeXus file can then be handed to `rebin` to skip fetching and
 cleaning entirely — useful for working offline, sharing a measurement's
