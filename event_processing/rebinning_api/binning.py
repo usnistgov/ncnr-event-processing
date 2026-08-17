@@ -5,7 +5,8 @@ from numba import njit, prange
 
 from . import models
 
-logger = logging.getLogger(__name__)
+# Use the logger from uvicorn so we get pretty formatting
+logger = logging.getLogger("uvicorn.error")
 
 def bin(entry, point, bins:models.Bins, events):
     """
@@ -49,6 +50,7 @@ def _bin_by_time(events, edges):
     # TODO: does not support masking
     # TODO: check the last edge is the correct length when it is truncated
     # TODO: duration is incorrect with masking and/or incomplete bins
+    # TODO: does not support paused measurements
 
     edges = np.asarray(edges*1e9, 'int64')
     result = {}
@@ -61,7 +63,7 @@ def _bin_by_time(events, edges):
     for name, detector in detectors.items():
         dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']
         binned_detectors[name] = hist(dims=dims, edges=edges, ts=ts, x=x, y=y)
-        print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
+        logger.debug(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
     result['detectors'] = binned_detectors
     result['count_time'] = np.diff(edges)*1e-9
 
@@ -123,6 +125,7 @@ def _hist_numba(dims, edges, ts, x, y, sorted=False):
     logger.debug(f"binning took {time.perf_counter()-t0_binning:.3f} seconds")
     return binned
 
+# CRUFT: Unused
 @njit(cache=True)
 def _numba_binning(bins, edges, ts, x, y, index):
     # Skip leading elements outside the histogram range
@@ -152,6 +155,7 @@ def _numba_binning(bins, edges, ts, x, y, index):
     # Past the final edge or no more events so done
     return
 
+# CRUFT: Unused
 @njit(parallel=True, cache=True)
 def _numba_binning_parallel(bins, edges, ts, x, y, index):
     n_edges = edges.size
