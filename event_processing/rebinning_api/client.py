@@ -1,5 +1,5 @@
 import base64
-from dataclasses import asdict
+import logging
 
 import requests
 import numpy as np
@@ -25,13 +25,19 @@ def get_rebinned():
 def post(endpoint, request):
     url = f"{HOST}/{endpoint}"
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    #print("post", endpoint, request)
+    # print("post", HOST, endpoint, request)
     data = request.model_dump_json()
-    r = requests.post(url, data=data, headers=headers)
+    try:
+        r = requests.post(url, data=data, headers=headers)
+    except Exception as exc:
+        logging.error(f"Exception raised during POST {url} with {data}\n   {exc}")
+        raise
     # result = unpackb(r.content)['result']
-    if r.status_code != 200:
-        raise r.raise_for_status()
     result = r.json()
+    if r.status_code != 200:
+        msg = f"POST {r.url} {r.status_code} {r.reason} : {result.get('detail', 'unknown reason')}"
+        logging.error(msg)
+        raise r.raise_for_status()
     return result
 
 def get_metadata(filename, path=None, point=0):

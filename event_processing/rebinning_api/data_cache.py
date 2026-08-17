@@ -1,9 +1,12 @@
 from pathlib import Path
-import os
+import logging
 
 import requests
 import h5py
 from importlib import resources
+
+# Use the logger from uvicorn so we get pretty formatting
+logger = logging.getLogger("uvicorn.error")
 
 # 'my_package.certs' is the dot-notation to your folder
 # 'server_chain.pem' is the actual file
@@ -28,7 +31,7 @@ def search_filename(nexusfile):
     """Lookup the download path for a nexus file given its name"""
     # Need cycle and experiment ID to retrieve nexus file.
     url = METADATA_ENDPOINT + "/datafiles"
-    print(f"Finding location of {nexusfile} using {url}")
+    logging.debug(f"Finding location of {nexusfile} using {url}")
     r = requests.get(url, params={"filename": nexusfile}, verify=str(cert_path))
     if not r.ok:
         raise RuntimeError(f"Nexus lookup <{url}?filename={nexusfile}> failed.")
@@ -47,9 +50,9 @@ def cache_url(url, cachedir, filename=None, refresh=False):
         filename = url.rsplit('/', 1)[-1]
     cachedir.mkdir(parents=True, exist_ok=True)
     fullpath = cachedir / filename
-    print(f"getting file at fullpath {fullpath}")
+    logging.debug(f"Getting file at fullpath {fullpath}")
     if refresh or not fullpath.exists():
-        print(f"Fetching {url} into {filename}")
+        logger.info(f"Fetching {url} into {filename}")
         r = requests.get(url)
         if not r.ok:
             raise RuntimeError(f"Fetch <{url}> failed.")
@@ -70,6 +73,5 @@ def load_nexus(filename, datapath=None, refresh=False):
             datapath = search_filename(filename)
         url = nexus_url(datapath, filename)
         fullpath = cache_url(url, NEXUS_FOLDER, filename=filename, refresh=refresh)
-    else:
-        print(f"Loading nexus file from cache: {fullpath}")
+    logging.debug(f"Loading nexus file from cache: {fullpath}")
     return h5py.File(fullpath)

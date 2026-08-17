@@ -1,10 +1,17 @@
 import io
+import logging
+
 import h5py
 
 from . import models
 from . import data_cache
 
-def open_nexus_entry(measurement: models.Measurement, refresh: bool = False):
+
+# Use the logger from uvicorn so we get pretty formatting
+logger = logging.getLogger("uvicorn.error")
+
+
+def open_nexus_entry(measurement: models.Measurement, refresh: bool = False) -> h5py.Group|None:
     point = measurement.point
     path, filename = measurement.path, measurement.filename
     entry_number = measurement.entry

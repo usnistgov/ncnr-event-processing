@@ -119,12 +119,16 @@ import kafka.structs
 import avroc
 import numpy as np
 
+
+# Use the logger from uvicorn so we get pretty formatting
+logger = logging.getLogger("uvicorn.error")
+
 if os.environ.get("USE_CONFLUENT", False):
     from .confluent_connector import kafka_consumer, stream_history
-    logging.info("Using confluent-kafka connector")
+    logger.info("Using confluent-kafka connector")
 else:
     from .kafka_python_connector import kafka_consumer, stream_history
-    logging.info("Using kafka-python connector")
+    logger.info("Using kafka-python connector")
 
 from . import nexus_util
 from . import data_cache
@@ -340,11 +344,11 @@ def get_schema_id_confluent_prefix(message: ConsumerRecord):
         #     and this will have length < 5
 
         schema_id = int.from_bytes(message.value[1:5], byteorder='big', signed=True)
-        logging.debug(f"getting schema_id from confluent payload header: {schema_id} (message bytes: {message.value})")
+        logger.debug(f"getting schema_id from confluent payload header: {schema_id} (message bytes: {message.value})")
     else:
         # no schema ID, so use the default schema version
         schema_id = DEFAULT_SCHEMA_VERSION
-        logging.debug(f"using default schema version: {schema_id}")
+        logger.debug(f"using default schema version: {schema_id}")
     return schema_id
 
 def get_schema_id(message: ConsumerRecord, default: int):
@@ -361,9 +365,9 @@ def get_schema_id(message: ConsumerRecord, default: int):
         for key, value in headers:
             if key == "v":
                 schema_id = int.from_bytes(value, byteorder='little', signed=False)
-                logging.debug(f"getting schema_version from kafka message header: {schema_id}")
+                logger.debug(f"getting schema_version from kafka message header: {schema_id}")
                 return schema_id
-    logging.debug(f"no schema id found")
+    logger.debug(f"no schema id found")
     return default
 
 def process_trigger(message, db: EventsManager):
@@ -427,7 +431,7 @@ def process_message(message: ConsumerRecord, db: EventsManager):
 
         # Safety gate: If the topic suffix is not handled (like 'sync'), ignore it safely
         if topic_suffix not in PROCESSOR:
-            logging.error(f"Skipping unhandled topic processor suffix: {topic_suffix} for topic {message.topic}")
+            logger.error(f"Skipping unhandled topic processor suffix: {topic_suffix} for topic {message.topic}")
             return
 
         processor = PROCESSOR[topic_suffix]
@@ -465,9 +469,13 @@ def run_fetch(files):
             fetch_events_for_file(consumer, filename)
 
 def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
-    print("fetching events for", filename)
-    nexus = data_cache.load_nexus(filename)
+    logger.debug("fetching events for", filename)
     dbs = []
+    try:
+        nexus = data_cache.load_nexus(filename, datapath)
+    except Exception as exc:
+        logger.error(f"Could not load {datapath}/{filename}:\n   {exc}")
+        return dbs
     try:
         for entry_name in nexus_util.nexus_entries(nexus):
             entry = nexus[entry_name]
@@ -480,9 +488,14 @@ def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
         nexus.close()
     return dbs
 
+# Note: fetch_hst_... differs from fetch_events_... in that it uses rebin_vsans_old() to retrieve events
 def fetch_hst_for_file(filename, datapath="", cleanup=True):
-    nexus = data_cache.load_nexus(filename, datapath)
     dbs = []
+    try:
+        nexus = data_cache.load_nexus(filename, datapath)
+    except Exception as exc:
+        logger.error(f"Could not load {datapath}/{filename}:\n   {exc}")
+        return dbs
     try:
         for entry_name in nexus_util.nexus_entries(nexus):
             entry = nexus[entry_name]
@@ -521,7 +534,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         disarm_time = entry_start_time + (entry['DAS_logs/counter/stopTime'][point] + 0.5) * 1000 # s -> ms
         arm_time = int(arm_time * 1e6) # ms -> ns
         disarm_time = int(disarm_time * 1e6) # ms -> ns
-        print(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {entry_start_time}")
+        logger.warning(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {entry_start_time}")
     else:
         arm_time = entry["DAS_logs/counter/eventStartTime"][point]
         disarm_time = entry["DAS_logs/counter/eventStopTime"][point]
@@ -585,11 +598,11 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
 
     if not start_times:
         #no gate_on found, use arm_time
-        logging.warning(f"no GATE_ON found, using arm_time={arm_time}")
+        logger.warning(f"no GATE_ON found, using arm_time={arm_time}")
         start_times = [arm_time] # fall back to arm time if no start_time in stream
     if not stop_times:
         #no gate_off found, use disarm_time
-        logging.warning(f"no GATE_OFF found, using disarm_time={disarm_time}")
+        logger.warning(f"no GATE_OFF found, using disarm_time={disarm_time}")
         stop_times = [disarm_time] # fall back to disarm time if no stop_time in stream
     
     db.set_times(start_times, stop_times, arm_time, disarm_time)
@@ -598,7 +611,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         # start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
         start_ms, stop_ms = start_time // 1000000, stop_time // 1000000 # ns -> ms
         if stop_ms < start_ms:
-            print(f"{instrument} {start_ms} {stop_ms}")
+            logger.debug(f"{instrument} {start_ms} {stop_ms}")
             raise RuntimeError(f"No counter disarm for entry {entry}")
         for channel in ('monitor', 'detector'):
             topic = f"{instrument}_{channel}"
@@ -612,7 +625,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
                 total += time.perf_counter_ns() - t0
                 n += 1
             with_kafka = time.perf_counter_ns() - t_start
-            print(f"Processing time for {n} messages in {topic} is {with_kafka/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
+            logger.info(f"Processing time for {n} messages in {topic} is {with_kafka/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
 
     db.close()
     return db
@@ -751,10 +764,10 @@ def live_stream(instrument, sync=1000):
                 if record['trigger'] == GATE_CLOSE:
                     if db is not None:
                         db.close()
-                        logging.warn(f"{filename} DISARM not received.")
+                        logger.warn(f"{filename} DISARM not received.")
                     sync_time = record['timestamp'] / 1e9 # ns
                     filename = cache_filename(instrument, sync_time)
-                    print(f"caching {filename}")
+                    logger.debug(f"caching {filename}")
                     db = EventsManager(CACHE_ROOT / filename)
                     # Fall through to process ARM record
                 # Other condition is a T0 record. This, too, can fall through

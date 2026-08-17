@@ -11,13 +11,14 @@ import sys
 from typing import Annotated
 import uuid
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Form
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
+from fastapi import HTTPException, status
 
 #from dateutil.parser import isoparser
 import numpy as np
@@ -30,6 +31,8 @@ from . import binning
 from . import data_cache
 from . import event_cache
 
+# Use the logger from uvicorn so we get pretty formatting
+logger = logging.getLogger("uvicorn.error")
 
 CACHE = None
 CACHE_PATH = "/tmp/event-processing"
@@ -145,8 +148,15 @@ def unbundle(reply):
 # ===================================
 @app.post("/metadata")
 def get_metadata(request: models.Measurement):
+    logger.debug(f"get_metadata {request}")
     point = request.point
-    entry = nexus_util.open_nexus_entry(request, refresh=REFRESH_CACHE)
+    try:
+        entry = nexus_util.open_nexus_entry(request, refresh=REFRESH_CACHE)
+    except Exception as exc:
+        detail = f"Unable to load {request.path}/{request.filename}.\n   {exc}"
+        logger.error(detail)
+        # Return a proper FastAPI error response when metadata cannot be loaded
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
     #print("entry", entry, entry.parent)
     # Go up to the root to get the other NXentry items in the file.
     entries = nexus_util.nexus_entries(entry.parent)
@@ -167,6 +177,8 @@ def get_metadata(request: models.Measurement):
     # TODO: lookup sweep controls from nexus file
     logs = {}
     sweep = None
+
+    # TODO: If no event data then return an API exception
 
     reply = models.MetadataReply(
         measurement=request,
