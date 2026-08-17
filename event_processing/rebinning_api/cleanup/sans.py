@@ -164,7 +164,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         if not ((x>=0).all() and (x<dims[0]).all() and (y>=0).all() and (y<dims[1]).all()):
             raise RuntimeError(f"Bad pixel id in {datapath}: x = {x.min()}:{x.max()} y = {y.min()}:{y.max()}")
 
-        detectors[name] = dict(dims=dims, ts=times, ts_sigma_stats=ts_sigma_stats, x=x, y=y)
+        detectors[detector_name] = dict(dims=dims, ts=times, ts_sigma_stats=ts_sigma_stats, x=x, y=y)
 
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
