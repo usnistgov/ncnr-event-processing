@@ -19,15 +19,14 @@ TIMESTAMP_RESOLUTION = 100e-9
 
 # EVENTS_FOLDER = "cache/event_files"
 EVENTFILE_NAME_KEY = "eventFileName"
-EVENTS_ENDPOINT = "http://nicedata.ncnr.nist.gov/eventfiles"
 CACHE_FOLDER = Path.cwd() / "cache"
-EVENTS_FOLDER = CACHE_FOLDER / "event_files"
+HST_FOLDER = CACHE_FOLDER / "hst_files"
 NEXUS_FOLDER = CACHE_FOLDER / "nexus_files"
 
 NUM_TUBE = 192
 NUM_PIXEL = 128
 
-def eventfiles_from_nexus(nexus): #, events_folder=EVENTS_FOLDER):
+def eventfiles_from_nexus(nexus): #, hst_folder=EVENTS_FOLDER):
     instrument = "vsans"
     files = set()
     for name, entry in nexus.items():
@@ -35,32 +34,6 @@ def eventfiles_from_nexus(nexus): #, events_folder=EVENTS_FOLDER):
             if 'eventFileName' in group:
                 files.add(group['eventFileName'][0].decode())
     return instrument, files
-
-def fetch_eventfile(instrument, eventfile, events_folder=EVENTS_FOLDER, overwrite=False):
-    #print("events folder", events_folder)
-    events_folder = Path(events_folder)
-    events_folder.mkdir(parents=True, exist_ok=True)
-    fullpath = events_folder / eventfile
-    if overwrite or not fullpath.exists():
-        url = EVENTS_ENDPOINT
-        #print(f"retrieving eventfile {eventfile} from {url}")
-        r = requests.get(url, params={"instrument": instrument, "filename": eventfile})
-        if r.ok:
-            open(fullpath, 'wb').write(r.content)
-            print(f"Fetched {eventfile}")
-        else:
-            # TODO: maybe store an empty missing file?
-            print(f"Failure: {r.status_code} '{r.reason}' during {url}?instrument={instrument}&filename={eventfile}")
-    return fullpath
-
-def retrieve_events(nexus, events_folder=EVENTS_FOLDER, overwrite=False):
-    instrument, files = eventfiles_from_nexus(nexus)
-    #print(f"Event files in {nexus_path}", files)
-    paths = []
-    for eventfile in sorted(files):
-        fetch_eventfile(instrument, eventfile, events_folder=events_folder, overwrite=overwrite)
-        paths.append(Path(events_folder) / eventfile)
-    return paths
 
 # One .hst file is recorded per detector carriage (front/middle), and each
 # file contains events for all four quadrants on that carriage, distinguished
@@ -73,17 +46,17 @@ TUBE_QUADRANTS = (
     ("L", 144, 192),
 )
 
-def find_event_files(entry, events_folder=EVENTS_FOLDER):
+def find_event_files(entry, hst_folder=HST_FOLDER):
     """
     Look up the event file names for the front and middle detector carriages
-    of this nexus entry, and return their expected paths within events_folder.
+    of this nexus entry, and return their expected paths within hst_folder.
     """
-    events_folder = Path(events_folder)
+    hst_folder = Path(hst_folder)
     paths = set()
     for item in entry.get('DAS_logs', {}).values():
         if hasattr(item, 'get'):
             if EVENTFILE_NAME_KEY in item:
-                paths.add(Path(events_folder) / item[EVENTFILE_NAME_KEY][0].decode())
+                paths.add(Path(hst_folder) / item[EVENTFILE_NAME_KEY][0].decode())
     return paths
 
 _HEX_DIGITS_AND_WHITESPACE = b'0123456789abcdefABCDEF\r\n \t'
@@ -98,20 +71,20 @@ def _is_ascii_hex(sample: bytes) -> bool:
     """
     return all(b in _HEX_DIGITS_AND_WHITESPACE for b in sample)
 
-def events_manager_from_files(entry, events_folder=EVENTS_FOLDER):
+def events_manager_from_files(entry, hst_folder=HST_FOLDER):
     """
     Build an EventsManager populated from local vsans .hst event files,
     for use in place of pulling events from the live kafka stream.
 
     Raises FileNotFoundError if the event files referenced by the nexus
-    entry are not present in events_folder.
+    entry are not present in hst_folder.
     """
-    events_folder = Path(events_folder)
-    paths = find_event_files(entry, events_folder=events_folder)
+    hst_folder = Path(hst_folder)
+    paths = find_event_files(entry, hst_folder=hst_folder)
     missing = [str(p) for p in paths if not p.exists()]
     if missing:
         raise FileNotFoundError(
-            f"No event files found: {', '.join(missing)} (looked in {events_folder})"
+            f"No event files found: {', '.join(missing)} (looked in {hst_folder})"
         )
     return events_manager_from_paths(entry, paths)
 
@@ -438,7 +411,7 @@ def demo():
     logging.basicConfig(level=logging.INFO)
     logging.getLogger('event_processing.rebinning_api.binning').setLevel(level=logging.DEBUG)
     # cache = "cache/event_files"
-    cache = EVENTS_FOLDER
+    cache = HST_FOLDER
     runs = [
         "20200923065024850",
         "20201008221350744",
