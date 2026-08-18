@@ -6,6 +6,8 @@ from .util import travel_time, get_partition, FWHM_to_sigma
 if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager
 
+logger = logging.getLogger("uvicorn.error")
+
 def extra_detector_distance(x: int | np.ndarray, y: int | np.ndarray):
     # TODO: add actual pixel-by-pixel additional distance?
     return 0.0
@@ -120,7 +122,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         detector_name = partition_to_detector(partition)
         nxdetector = entry.get(f"instrument/{detector_name}", None)
         if nxdetector is None:
-            logging.warning(f"Missing {entry.name}/instrument/{detector_name} in {datapath}")
+            logger.warning(f"Missing {entry.name}/instrument/{detector_name} in {datapath}")
             continue
         DAS = entry[nxdetector["data"].attrs['target']].parent
         dims = tuple(DAS['dimension'][()])

@@ -8,7 +8,7 @@ if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager, CleanedEvents
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 AUTO_BIT_SHAVING = False
 
@@ -279,7 +279,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             bad_y = np.where((y < 0) | (y >= dims[1]))[0]
             bad = np.union1d(bad_x, bad_y)
             pixel_id_note = f", pixel_ids={pixel_ids[bad]}" if pixel_ids is not None else ""
-            logging.error(f"Bad pixels in {detector_name}: x={x[bad]}, orig_x={orig_x[bad]}, y={y[bad]}, orig_y={orig_y[bad]}{pixel_id_note}")
+            logger.error(f"Bad pixels in {detector_name}: x={x[bad]}, orig_x={orig_x[bad]}, y={y[bad]}, orig_y={orig_y[bad]}{pixel_id_note}")
             raise RuntimeError(f"Bad pixel id in {datapath} for detector {detector_name}")
         # orig_x/orig_y/pixel_ids are only needed above for the bad-pixel
         # check; drop them now rather than holding onto them (plus the
@@ -356,7 +356,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     for detector_shortname in ALL_DETECTORS:
         detector_name = f"detector_{detector_shortname}"
         if detector_name not in detectors:
-            logging.debug(f"Missing detector {detector_name} in events: setting to zeros array")
+            logger.debug(f"Missing detector {detector_name} in events: setting to zeros array")
             nxdetector = entry.get(f"instrument/{detector_name}", None)
             if nxdetector is None:
                 logger.warning(f"Missing {entry.name}/instrument/{detector_name} in {datapath}")
@@ -414,7 +414,7 @@ def _cleanup_vsans(entry, raw_events, datapath=""):
     for k, name in enumerate(detectors):
         nxdetector = entry.get(f"instrument/detector_{name}", None)
         if nxdetector is None:
-            logging.warn(f"Missing {entry.name}/instrument/detector_{name} in {datapath}")
+            logger.warning(f"Missing {entry.name}/instrument/detector_{name} in {datapath}")
             continue
         distance = nxdetector["distance"][0]
         travel_time = int(1e8 * distance / neutron_velocity(wavelength)) # cm / (m/s) * 1e8 = ns

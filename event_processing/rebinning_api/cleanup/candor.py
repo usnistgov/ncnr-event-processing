@@ -9,6 +9,8 @@ from .util import travel_time, get_partition, neutron_velocity
 if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager, CleanedEvents
 
+logger = logging.getLogger("uvicorn.error")
+
 DEBUG = False
 NUM_DETECTORS = 54
 
@@ -72,7 +74,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         detector_name = partition_to_detector(partition)
         nxdetector = entry.get(f"instrument/{detector_name}", None)
         if nxdetector is None:
-            logging.warning(f"Missing {entry.name}/instrument/{detector_name} in {datapath}")
+            logger.warning(f"Missing {entry.name}/instrument/{detector_name} in {datapath}")
             continue
         DAS = entry[nxdetector["data"].attrs['target']].parent
         dims = tuple(DAS['dimension'][()])

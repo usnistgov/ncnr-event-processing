@@ -31,7 +31,7 @@ def search_filename(nexusfile):
     """Lookup the download path for a nexus file given its name"""
     # Need cycle and experiment ID to retrieve nexus file.
     url = METADATA_ENDPOINT + "/datafiles"
-    logging.debug(f"Finding location of {nexusfile} using {url}")
+    logger.debug(f"Finding location of {nexusfile} using {url}")
     r = requests.get(url, params={"filename": nexusfile}, verify=str(cert_path))
     if not r.ok:
         raise RuntimeError(f"Nexus lookup <{url}?filename={nexusfile}> failed.")
@@ -50,7 +50,7 @@ def cache_url(url, cachedir, filename=None, refresh=False):
         filename = url.rsplit('/', 1)[-1]
     cachedir.mkdir(parents=True, exist_ok=True)
     fullpath = cachedir / filename
-    logging.debug(f"Getting file at fullpath {fullpath}")
+    logger.debug(f"Getting file at fullpath {fullpath}")
     if refresh or not fullpath.exists():
         logger.info(f"Fetching {url} into {filename}")
         r = requests.get(url)
@@ -73,5 +73,5 @@ def load_nexus(filename, datapath=None, refresh=False):
             datapath = search_filename(filename)
         url = nexus_url(datapath, filename)
         fullpath = cache_url(url, NEXUS_FOLDER, filename=filename, refresh=refresh)
-    logging.debug(f"Loading nexus file from cache: {fullpath}")
+    logger.debug(f"Loading nexus file from cache: {fullpath}")
     return h5py.File(fullpath)

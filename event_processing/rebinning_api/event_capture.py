@@ -806,7 +806,7 @@ def live_stream(instrument, sync=1000):
                 if record['trigger'] == GATE_CLOSE:
                     if db is not None:
                         db.close()
-                        logger.warn(f"{filename} DISARM not received.")
+                        logger.warning(f"{filename} DISARM not received.")
                     sync_time = record['timestamp'] / 1e9 # ns
                     filename = cache_filename(instrument, sync_time)
                     logger.debug(f"caching {filename}")

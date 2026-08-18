@@ -13,7 +13,7 @@ import resource
 
 import psutil
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 _process = psutil.Process(os.getpid())
 _last_majflt = None
