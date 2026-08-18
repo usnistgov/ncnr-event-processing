@@ -25,10 +25,9 @@ python -m event_processing.rebinning_client.build_client
 
 ## Usage
 
-To run the web server and gui
+To run the web server and start the client use
 ```sh
-event-processing serve &
-python -m event_processing.rebinning_client.demo
+event-processing serve --preview
 ```
 
 ### Command-line rebinning
