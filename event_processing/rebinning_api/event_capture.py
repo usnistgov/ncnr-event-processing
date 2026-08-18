@@ -123,13 +123,7 @@ import numpy as np
 # Use the logger from uvicorn so we get pretty formatting
 logger = logging.getLogger("uvicorn.error")
 
-if os.environ.get("USE_CONFLUENT", False):
-    from .confluent_connector import kafka_consumer, stream_history
-    logger.info("Using confluent-kafka connector")
-else:
-    from .kafka_python_connector import kafka_consumer, stream_history
-    logger.info("Using kafka-python connector")
-
+from .confluent_connector import kafka_consumer, stream_history
 from . import nexus_util
 from . import data_cache
 from . import cleanup
@@ -164,7 +158,7 @@ def avro_decoder(schema):
     from types import SimpleNamespace
     reader = avroc.compile_decoder(json.loads(schema))
     def decoder(message: ConsumerRecord):
-        with BytesIO(message.value) as fd:
+        with BytesIO(message.value()) as fd:
             return reader(fd)
             #return SimpleNamespace(**data) # doesn't work for nested structures
     return decoder
@@ -311,8 +305,8 @@ class EventsManager:
     def _create_or_extend_pairs(self, name, timestamp: np.ndarray, value: np.ndarray):
         #print("extend {name} pairs", events)
         data = self._fields.setdefault(name, {"timestamp": [], "value": []})
-        data["timestamp"].extend(timestamp)
-        data["value"].extend(value)
+        data["timestamp"].append(timestamp)
+        data["value"].append(value)
 
 
 def event_cleanup(entry, raw_events, datapath=""):
@@ -360,7 +354,7 @@ def get_schema_id(message: ConsumerRecord, default: int):
     Header message format: ("v", <byte>) where the byte value is to be interpreted
     as uint8 (schema version)
     """
-    headers = message.headers
+    headers = message.headers()
     if headers is not None:
         for key, value in headers:
             if key == "v":
@@ -389,6 +383,46 @@ def process_detector(message: ConsumerRecord, db: EventsManager):
     pixel_id = np.asarray([n['pixel_id'] for n in record['neutrons']], dtype='int64')
     detector = f"detector_{message.partition}"
     db.counts(detector, timestamp, pixel_id)
+
+def process_detector_batch(messages: list, db: EventsManager, gate_on_ns: int, gate_off_ns: int):
+    """Processes a batch of native messages, optimizing for Numba"""
+    if not messages:
+        return
+        
+    # Assume the schema is uniform across a single batch on a specific topic
+    schema_id = get_schema_id(messages[0], default=2)
+    if schema_id != 2:
+        raise NotImplementedError("Batch processing only supports schema_id == 2")
+
+
+    from .decoders import parse_neutron_batch_gated_metrics
+    
+    # 1. Group payloads by partition
+    partition_buffers = {}
+    for msg in messages:
+        buf = msg.value()
+        if buf:
+            # If using kafka-python, use msg.partition instead of msg.partition()
+            pid = msg.partition() if callable(msg.partition) else msg.partition
+            partition_buffers.setdefault(pid, []).append(buf)
+            
+    # 2. Process each partition via Numba
+    for pid, buffers in partition_buffers.items():
+        raw_bytes = b''.join(buffers)
+        
+        # Fire the Numba gated batch decoder
+        timestamp, pixel_id, num_before, num_after = parse_neutron_batch_gated_metrics(
+            np.frombuffer(raw_bytes, dtype=np.uint8), 
+            gate_on_ns, 
+            gate_off_ns
+        )
+        
+        # Write to db if any neutrons survived the filter
+        if len(timestamp) > 0:
+            detector = f"detector_{pid}"
+            db.counts(detector, timestamp, pixel_id)
+            logger.debug(f"PROFILING: {len(timestamp)} neutrons in {len(buffers)} packets (rejected: {num_before} before, {num_after} after)")
+
 
 def process_monitor(message, db: EventsManager):
     # monitor schema is neutron_detector-value schema (2)
@@ -571,27 +605,28 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # TODO: need to keep track of previously retrieved offsets so we don't
     # have to search the whole stream, can put bounds (sqlite?)
     stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=500)
-    for message in stream:
-        schema_id = get_schema_id(message, default=1)
-        decoder = get_decoder(schema_id)
-        record = decoder(message)
-        # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
-        if record['timestamp'] < arm_time:
-            continue
-        if record['timestamp'] > disarm_time:
-            break
-        if record['syncType'] == "GATE_ON":
-            # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
-            # print("GATE_ON", message, record)
-            start_times.append(record['timestamp'])
-        elif record['syncType'] == "GATE_OFF":
-            # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
-            # print("GATE_OFF", message, record)
-            stop_times.append(record['timestamp'])
-        elif record['syncType'] == "TO_SYNC":
-            db.trigger(record['timestamp'])
-        else:
-            raise ValueError(f"Unknown trigger type {record['syncType']}")
+    for message_batch in stream:
+        for message in message_batch:
+            schema_id = get_schema_id(message, default=1)
+            decoder = get_decoder(schema_id)
+            record = decoder(message)
+            # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
+            if record['timestamp'] < arm_time:
+                continue
+            if record['timestamp'] > disarm_time:
+                break
+            if record['syncType'] == "GATE_ON":
+                # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
+                # print("GATE_ON", message, record)
+                start_times.append(record['timestamp'])
+            elif record['syncType'] == "GATE_OFF":
+                # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
+                # print("GATE_OFF", message, record)
+                stop_times.append(record['timestamp'])
+            elif record['syncType'] == "TO_SYNC":
+                db.trigger(record['timestamp'])
+            else:
+                raise ValueError(f"Unknown trigger type {record['syncType']}")
 
     if len(start_times) != len(stop_times):
         warnings.warn(f"Gate mismatch: {len(start_times)} GATE_ON, {len(stop_times)} GATE_OFF found in [{arm_time}-{disarm_time}]")
@@ -613,17 +648,24 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         if stop_ms < start_ms:
             logger.debug(f"{instrument} {start_ms} {stop_ms}")
             raise RuntimeError(f"No counter disarm for entry {entry}")
-        for channel in ('monitor', 'detector'):
+        for channel in ('detector',): # no monitor yet
             topic = f"{instrument}_{channel}"
             total, n = 0, 0
 
             t_start = time.perf_counter_ns()
             stream = stream_history(consumer, topic, start_ms, stop_ms, timeout_ms=timeout_ms)
-            for message in stream:
+            for message_batch in stream:
                 t0 = time.perf_counter_ns()
-                process_message(message, db)
+                topic_suffix = topic.rsplit('_', 1)[-1]
+                if topic_suffix == 'detector':
+                    process_detector_batch(message_batch, db, gate_on_ns=start_time, gate_off_ns=stop_time)
+                    n += len(message_batch)
+                else:
+                    for msg in message_batch:
+                        PROCESSOR[topic_suffix](msg, db)
+                        n += 1
+
                 total += time.perf_counter_ns() - t0
-                n += 1
             with_kafka = time.perf_counter_ns() - t_start
             logger.info(f"Processing time for {n} messages in {topic} is {with_kafka/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
 

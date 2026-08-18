@@ -68,7 +68,43 @@ def parse_neutron_packet_2(buffer: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         
     return timestamps, pixel_ids
 
+@numba.njit((uint8_1d_readonly, numba.int64, numba.int64), cache=True)
+def parse_neutron_batch_gated_metrics(buffer: np.ndarray, gate_on: int, gate_off: int):
+    max_elements = len(buffer) // 2
+    timestamps = np.empty(max_elements, dtype=np.int64)
+    pixel_ids = np.empty(max_elements, dtype=np.int32)
+    
+    cursor = 0
+    total_neutrons = 0
+    
+    # Initialize our rejection counters
+    rejected_early = 0
+    rejected_late = 0
+    
+    while cursor < len(buffer):
+        array_count, cursor = read_avro_array_header(buffer, cursor)
+        
+        for _ in range(array_count):
+            ts, cursor = decode_avro_varint(buffer, cursor)
+            pix, cursor = decode_avro_varint(buffer, cursor)
+            
+            # Categorize and count the event
+            if ts < gate_on:
+                rejected_early += 1
+            elif ts > gate_off:
+                rejected_late += 1
+            else:
+                timestamps[total_neutrons] = ts
+                pixel_ids[total_neutrons] = pix
+                total_neutrons += 1
+                
+    # Return the valid arrays AND the statistics
+    return timestamps[:total_neutrons], pixel_ids[:total_neutrons], rejected_early, rejected_late
 
+
+###################
+## HST decoders  ##
+###################
 # Event types packed into bits 31-30 of each Ordela/VAX event word, per
 # EventModeProcessing_OrdelaVAX_N.ipf
 ATXY = 0   # x/y event, timestamp is the running time (msw/nRoll/lsw)
