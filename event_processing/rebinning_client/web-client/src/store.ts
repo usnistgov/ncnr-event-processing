@@ -178,6 +178,7 @@ export interface TimeBins {
 export interface SummaryTimeRequest {
     measurement: MetadataRequest,
     bins: TimeBins,
+    split?: boolean,
 }
 
 export const metadata = ref<MetadataReply>({duration: 1});

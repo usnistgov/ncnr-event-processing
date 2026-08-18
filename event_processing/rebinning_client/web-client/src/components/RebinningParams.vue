@@ -38,6 +38,10 @@
           Rebin + Download
           <span v-if="downloading" class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>
         </button>
+        <div class="form-check form-switch ms-3 d-inline-block align-middle">
+          <input class="form-check-input" type="checkbox" id="splitFramesToggle" v-model="split_frames">
+          <label class="form-check-label" for="splitFramesToggle">Split frames</label>
+        </div>
       </div>
       <form :action="`${rebinning_api}timebin/nexus_download`" method="post" target="hiddenFrame" class="d-none">
         <input ref="download_request_input" type="text" name="request_str" />
@@ -74,6 +78,7 @@ const x_slice_interactor = ref<xSliceInteractor>();
 const shown_summary = ref('');
 const fetching_summary = ref(false);
 const downloading = ref(false);
+const split_frames = ref(false);
 
 const stored_bins = shallowRef<TimeBins>();
 
@@ -191,7 +196,8 @@ async function download_rebinned() {
   const bins = get_rebin_time_bins_object();
   const request_object: SummaryTimeRequest = {
     measurement: metadata_request.value,
-    bins
+    bins,
+    split: split_frames.value
   };
   const download_id = uuidv4();
   const request_string = JSON.stringify(request_object);
@@ -229,7 +235,8 @@ async function update_summary() {
   fetching_summary.value = true;
   const request_object: SummaryTimeRequest = {
     measurement: metadata_request.value,
-    bins
+    bins,
+    split: split_frames.value
   }
 
   let summary;
