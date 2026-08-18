@@ -1,3 +1,5 @@
+# *** Deprecated *** Use "event-processing serve --preview" instead.
+
 import base64
 from dataclasses import dataclass, asdict
 import io
@@ -80,13 +82,8 @@ async def download_nexus(session_id: str):
     bins = time_bin_settings.get_rebin_time_bins_object()
     binning_state['downloading_nexus'] = True
     print("starting nexus rebin")
-    nexus_reply = await run.io_bound(binning_client.get_nexus, metadata, bins)
+    nexus_reply = await run.io_bound(binning_client.get_timebin_nexus, metadata, bins)
     print("done with nexus rebin")
-    orig_filename = metadata.measurement.filename
-    orig_path = pathlib.Path(orig_filename)
-    file_suffixes = ''.join(orig_path.suffixes)
-    file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
-    new_filename = f"{file_stem}_rebinned{file_suffixes}"
     nexus_bytes = base64.b64decode(nexus_reply.base64_data)
     result = io.BytesIO(nexus_bytes)
     buffer_size = 2**16 # 64K
@@ -99,8 +96,8 @@ async def download_nexus(session_id: str):
         binning_state['downloading_nexus'] = False
         
     headers = {
-        'Content-Disposition': f'attachment; filename="{new_filename}"',
-        'Content-Type': 'application/hdf5',
+        'Content-Disposition': f'attachment; filename="{nexus_reply.filename}"',
+        'Content-Type': nexus_reply.mimetype,
         'Content-Length': f'{len(nexus_bytes)}',
     }
     return StreamingResponse(result_streamer(), headers=headers)
@@ -703,7 +700,7 @@ async def index(client: Client):
                 orig_path = pathlib.Path(orig_filename)
                 file_suffixes = ''.join(orig_path.suffixes)
                 file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
-                new_filename = f"{file_stem}_rebinned{file_suffixes}"
+                new_filename = f"{file_stem}{file_suffixes}"
                 nexus_bytes = base64.b64decode(nexus_reply.base64_data)
                 ui.download(nexus_bytes, filename=new_filename)
                 # def iterfile():
@@ -718,4 +715,5 @@ async def index(client: Client):
     await client.disconnected()
     SESSION_LOOKUP.pop(session_id)
                 
+print("""*** Deprecated *** Use "event-processing serve --preview" instead.""")
 ui.run(favicon=FAVICON)

@@ -45,7 +45,7 @@ def nexus_dup(entry, binned, bins, bin_number=None):
     """
     def select_bin_or_bins(data):
         """Return the entire data array or the target bin if bin_number is not None"""
-        return data if bin_number is None else data[bin_number]
+        return data if bin_number is None else data[bin_number:bin_number+1] if len(data.shape) == 1 else data[bin_number]
 
     # Search each detector group for the DASlogs link containing the counts.
     # Record replacement = {link: data}, but only if there are binned events for the detector.

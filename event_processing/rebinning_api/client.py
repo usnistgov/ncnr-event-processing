@@ -77,7 +77,7 @@ def get_frames(metadata, bins, start=0, stop=1):
     reply = post(f"timebin/frame/{start}", request)
     return models.FrameReply(**reply)
 
-def get_nexus(metadata, bins):
+def get_timebin_nexus(metadata, bins):
     request = models.SummaryTimeRequest(measurement=metadata.measurement, bins=bins)
     reply = post("timebin/nexus", request) # point number ignored
     return models.NexusReply(**reply)
@@ -172,14 +172,15 @@ def demo():
     metadata = get_metadata(filename, path=path)
     #print("metadata", metadata)
     bins = time_linbins(metadata, interval=10.0)
-    summary = get_summary(metadata, bins)
+    #summary = get_summary(metadata, bins)
     #print("summary", summary)
     #frames = get_frames(metadata, bins, 0, 2)
     #print("frames", frames)
-    hdf = get_nexus(metadata, bins)
-    hdf_bytes = base64.b64decode(hdf.base64_data)
-    with open('/tmp/client_sample.hdf', 'wb') as fd:
-        fd.write(hdf_bytes)
+    reply = get_timebin_nexus(metadata, bins, split=False)
+    data = base64.b64decode(reply.base64_data)
+    print(f"writing /tmp/{reply.filename}")
+    with open(f'/tmp/{reply.filename}', 'wb') as fd:
+        fd.write(data)
 
 def test_frame():
     filename = "sans68869.nxs.ngv"

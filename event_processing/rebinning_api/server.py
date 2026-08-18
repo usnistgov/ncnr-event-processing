@@ -236,11 +236,7 @@ def get_frame_range(measurement, bins, start, end):
 # ===================================
 @app.post("/timebin/nexus")
 def get_timebin_nexus(request: models.SummaryTimeRequest):
-    data = get_nexus(request.measurement, request.bins)
-    filename = Path(request.measurement.filename)
-    outfile = f"{filename.stem}_rebinned{'.zip' if request.split else filename.suffix}"
-    mimetype = "application/zip" if request.split else "application/x-hdf5",
-
+    data, outfile, mimetype = get_nexus(request.measurement, request.bins, request.split)
     reply = models.NexusReply(mimetype=mimetype, filename=outfile, base64_data=base64.b64encode(data))
     return reply
 
@@ -257,24 +253,19 @@ def get_download_status(download_id: str):
 
 @app.post('/timebin/nexus_download')
 async def download_nexus_form(request_str: Annotated[str, Form()], download_id: Annotated[str, Form()] = ''):
-    """ post request coming from HTML form, that can trigger a download """
+    """post request coming from HTML form, that can trigger a download """
     request_dict = json.loads(request_str)
     request = models.SummaryTimeRequest(**request_dict)
-    coro = asyncio.to_thread(get_nexus, request.measurement, request.bins)
+    coro = asyncio.to_thread(get_nexus, request.measurement, request.bins, request.split)
     try:
-        data = await coro
-        orig_filename = request.measurement.filename
-        orig_path = Path(orig_filename)
-        file_suffixes = ''.join(orig_path.suffixes)
-        file_stem = re.sub(f"{file_suffixes}$", '', orig_filename)
-        new_filename = f"{file_stem}_rebinned{file_suffixes}"
+        data, filename, mimetype = await coro
         buffer_size = 2**16 # 64K
         async def result_streamer():
-            with io.BytesIO(data) as bio:
-                buffer = bio.read(buffer_size)
+            with io.BytesIO(data) as mem_fd:
+                buffer = mem_fd.read(buffer_size)
                 while buffer:
                     yield buffer
-                    buffer = bio.read(buffer_size)
+                    buffer = mem_fd.read(buffer_size)
             if (download_id != ''):
                 COMPLETED_DOWNLOADS.append(download_id)
 
@@ -283,8 +274,8 @@ async def download_nexus_form(request_str: Annotated[str, Form()], download_id: 
         content_length = str(len(data))
         etag = hashlib.md5(f'{last_modified}-{content_length}'.encode(), usedforsecurity=False).hexdigest()
         headers = {
-            'Content-Disposition': f'attachment; filename="{new_filename}"',
-            'Content-Type': 'application/x-hdf5',
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': mimetype,
             'Content-Length': content_length,
             'Last-Modified': last_modified,
             'ETag': etag,
@@ -368,13 +359,26 @@ def get_nexus(measurement: models.Measurement, bins, split: bool = False):
     # TODO: maybe provide "explode" option to split each bin to a different file
     # TODO: check that there is only one entry with one point
     # TODO: replace monitor, and any devices that are binned
+    # logger.debug(f"get_nexus {measurement.filename}")
     binned = bin_events(measurement, bins, summary=False)
     entry = nexus_util.open_nexus_entry(measurement, refresh=REFRESH_CACHE)
     try:
-        data = nexus_util.nexus_dup(entry, binned, bins)
+        if split:
+            data = nexus_util.nexus_zip(entry, binned, bins)
+        else:
+            data = nexus_util.nexus_dup(entry, binned, bins)
     finally:
         entry.file.close()
-    return data
+
+    filename = Path(measurement.filename)
+    # Split into stem and suffixes (preserve multi‑part suffixes like .nxs.ngv)
+    suffixes = "".join(filename.suffixes)
+    stem = filename.name[:-len(suffixes)] if suffixes else filename.name
+    rebinned_name = f"{stem}_rebinned{suffixes}"
+
+    mimetype = "application/zip" if split else "application/x-hdf5"
+    outfile = rebinned_name + ".zip" if split else rebinned_name
+    return data, outfile, mimetype
 
 
 def ensure_cleaned_events(measurement: models.Measurement, entry, hst_files: list[Path] | None = None):
@@ -529,9 +533,9 @@ def check(filename=None, verbose=False):
     detector = "detector_FL"
     if verbose: print(r_one.data[detector].shape, r_many.data[detector].shape)
     assert (r_one.data[detector][0] == r_many.data[detector][0]).all()
-    hdf = get_timebin_nexus(request)
+    reply = get_timebin_nexus(request)
     with open('/tmp/sample.hdf', 'wb') as fd:
-        fd.write(base64.b64decode(hdf.base64_data))
+        fd.write(base64.b64decode(reply.base64_data))
 
 def check2():
     path = "vsans/202102/27861/data"
@@ -551,9 +555,9 @@ def check3():
     metadata = get_metadata(measurement)
     bins = client.time_linbins(metadata, interval=501)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
-    hdf = get_timebin_nexus(request)
+    reply = get_timebin_nexus(request)
     with open('/tmp/end-to-end.hdf', 'wb') as fd:
-        fd.write(base64.b64decode(hdf.base64_data))
+        fd.write(base64.b64decode(reply.base64_data))
 
 # TODO: cache a version number, clearing the cache if there is a version mismatch
 usage = """
@@ -649,7 +653,7 @@ def open_preview(host: str = 'localhost', port: int = 8000, filename: str = '', 
         else:
             target_url = base_url
 
-        print(f"Waiting for server to become ready at {base_url} ...")
+        logger.info(f"Waiting for server to become ready at {base_url} ...")
         
         # Poll the server until it responds
         while True:
@@ -659,11 +663,11 @@ def open_preview(host: str = 'localhost', port: int = 8000, filename: str = '', 
                 break # If we get here, the server is up!
             except urllib.error.URLError:
                 # Connection refused; sleep for a quarter-second and try again
-                print(f"Server not ready yet... retrying in 250ms")
+                logger.warning(f"Server not ready yet... retrying in 250ms")
                 time.sleep(0.25)
         
-        print(f"Server is up! Opening browser: {target_url}")
-        webbrowser.open(target_url)
+        logger.info(f"Server is up! Opening browser: {target_url}")
+        webbrowser.open(target_url, new=0)
     
     # Start the polling thread
     threading.Thread(target=wait_and_open, daemon=True).start()
@@ -671,6 +675,9 @@ def open_preview(host: str = 'localhost', port: int = 8000, filename: str = '', 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Event processing server and CLI utilities.')
+    # Global log level for uvicorn (applies to any subcommand)
+    parser.add_argument('--log-level', choices=['critical', 'error', 'warning', 'info', 'debug', 'trace'],
+                        default='info', help='Set server log level')
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
     # --- Shared argument groups, applicable to any command that reads
@@ -718,6 +725,18 @@ def main():
 
     args = parser.parse_args()
 
+    # Apply the requested log level to uvicorn's loggers before the server starts.
+    # uvicorn expects a string like "debug"; we set the Python logging level accordingly.
+    level_name = args.log_level.upper()
+    # Map textual level to logging constant (default INFO if unknown).
+    log_level_val = getattr(logging, level_name, logging.INFO)
+    logging.getLogger("uvicorn.error").setLevel(log_level_val)
+    logging.getLogger("uvicorn.access").setLevel(log_level_val)
+
+    # Set the root logger so our own logger respects the same level. With level debug some
+    # third party packages will get really noisy.
+    #logging.getLogger().setLevel(log_level_val)
+
     if args.command == "serve":
         import uvicorn
 
@@ -733,9 +752,10 @@ def main():
         if args.preview:
             open_preview(host=args.host, port=args.port, filename=args.filename, path=args.path)
 
+        # Start the server in a busy loop. This never returns.
         print(f"Starting API and Web server on http://{args.host}:{args.port} ...")
-        uvicorn.run(app, host=args.host, port=args.port)
-        
+        uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+
     elif args.command == "clear":
         CACHE.clear()
         print("Cache cleared.")
@@ -752,7 +772,7 @@ def main():
         configure_data_source(
             cache=args.cache,
             refresh=args.refresh,
-            auto_hst_file=args.auto_hist_file,
+            auto_hst_file=args.auto_hst_file,
             hst_files=args.hst_files,
             events_file=args.events_file,
         )
