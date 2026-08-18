@@ -582,7 +582,7 @@ def configure_data_source(cache: str = None, refresh: bool = False, auto_hst_fil
     data_cache.configure(CACHE_ROOT)
     event_cache.configure(CACHE_ROOT)
 
-def cli_rebin(filename: str, path: str, cache: str = None, refresh: bool = False, auto_hst_file: bool = False, hst_files: list[str] = None, preview: bool = False, interval: int = None, nbins: int = None, events_file: str = None):
+def cli_rebin(filename: str, path: str, preview: bool = False, interval: int = None, nbins: int = None, events_file: str = None):
     """Handles the CLI execution for rebinning or launching the preview."""
     if preview:
         import webbrowser
@@ -591,8 +591,6 @@ def cli_rebin(filename: str, path: str, cache: str = None, refresh: bool = False
         print(f"Opening preview in browser: {url}")
         webbrowser.open(url)
         return
-
-    configure_data_source(cache, refresh, auto_hst_file, hst_files, events_file)
 
     from . import client
     print(f"Loading measurement for {filename}...")
@@ -622,9 +620,8 @@ def cli_rebin(filename: str, path: str, cache: str = None, refresh: bool = False
 
     print(f"Success! Rebinned file saved to ./{out_filename}")
 
-def cli_save_events(filename: str, path: str, cache: str = None, refresh: bool = False, auto_hst_file: bool = False, hst_files: list[str] = None, point: int = 0, entry: int = 0, output: str = None):
+def cli_save_events(filename: str, path: str, hst_files: list[str] = None, point: int = 0, entry: int = 0, output: str = None):
     """Handles the CLI execution for fetching, cleaning, and persisting events without binning."""
-    configure_data_source(cache, refresh, auto_hst_file)
     hst_paths = [Path(p) for p in hst_files] if hst_files else None
 
     measurement = models.Measurement(filename=filename, path=path, point=point, entry=entry)
@@ -636,6 +633,42 @@ def cli_save_events(filename: str, path: str, cache: str = None, refresh: bool =
         import shutil
         shutil.copyfile(cache_path, output)
         print(f"Copied events+nexus file to {output}")
+
+def open_preview(host: str = 'localhost', port: int = 8000, filename: str = '', path: str = ''):
+    import time
+    import threading
+    import webbrowser
+    import urllib.request
+    import urllib.error
+
+    def wait_and_open():
+        # Now that FastAPI serves the frontend, we use its port!
+        base_url = f"http://{host}:{port}/static"
+        
+        # Append query parameters if a file was specified
+        if filename:
+            target_url = f"{base_url}/?filename={filename}&path={path}"
+        else:
+            target_url = base_url
+
+        print(f"Waiting for server to become ready at {base_url} ...")
+        
+        # Poll the server until it responds
+        while True:
+            try:
+                # Attempt to connect to the server
+                urllib.request.urlopen(base_url)
+                break # If we get here, the server is up!
+            except urllib.error.URLError:
+                # Connection refused; sleep for a quarter-second and try again
+                print(f"Server not ready yet... retrying in 250ms")
+                time.sleep(0.25)
+        
+        print(f"Server is up! Opening browser: {target_url}")
+        webbrowser.open(target_url)
+    
+    # Start the polling thread
+    threading.Thread(target=wait_and_open, daemon=True).start()
 
 def main():
     import argparse
@@ -688,45 +721,18 @@ def main():
 
     if args.command == "serve":
         import uvicorn
-        import webbrowser
-        import threading
-        import urllib.request
-        import urllib.error
-        import time
 
         print(f"args: {args}")
 
-        configure_data_source(args.cache, args.refresh, args.auto_hst_file, args.hst_files)
+        configure_data_source(
+            cache=args.cache,
+            refresh=args.refresh,
+            auto_hst_file=args.auto_hst_file,
+            hst_files=args.hst_files,
+        )
 
         if args.preview:
-            def wait_and_open():
-                # Now that FastAPI serves the frontend, we use its port!
-                base_url = f"http://{args.host}:{args.port}/static"
-                
-                # Append query parameters if a file was specified
-                if args.filename:
-                    target_url = f"{base_url}/?filename={args.filename}&path={args.path}"
-                else:
-                    target_url = base_url
-
-                print(f"Waiting for server to become ready at {base_url} ...")
-                
-                # Poll the server until it responds
-                while True:
-                    try:
-                        # Attempt to connect to the server
-                        urllib.request.urlopen(base_url)
-                        break # If we get here, the server is up!
-                    except urllib.error.URLError:
-                        # Connection refused; sleep for a quarter-second and try again
-                        print(f"Server not ready yet... retrying in 250ms")
-                        time.sleep(0.25)
-                
-                print(f"Server is up! Opening browser: {target_url}")
-                webbrowser.open(target_url)
-            
-            # Start the polling thread
-            threading.Thread(target=wait_and_open, daemon=True).start()
+            open_preview(host=args.host, port=args.port, filename=args.filename, path=args.path)
 
         print(f"Starting API and Web server on http://{args.host}:{args.port} ...")
         uvicorn.run(app, host=args.host, port=args.port)
@@ -744,12 +750,34 @@ def main():
     elif args.command == "check3":
         check3()
     elif args.command == "rebin":
-        cli_rebin(args.filename, args.path, cache=args.cache, refresh=args.refresh, auto_hst_file=args.auto_hst_file,
-                  hst_files=args.hst_files, preview=args.preview, interval=args.interval, nbins=args.nbins,
-                  events_file=args.events_file)
+        configure_data_source(
+            cache=args.cache,
+            refresh=args.refresh,
+            auto_hst_file=args.auto_hist_file,
+            hst_files=args.hst_files,
+            events_file=args.events_file,
+        )
+        cli_rebin(
+            args.filename,
+            args.path, 
+            preview=args.preview,
+            interval=args.interval,
+            nbins=args.nbins,
+        )
     elif args.command == "save-events":
-        cli_save_events(args.filename, args.path, cache=args.cache, refresh=args.refresh, auto_hst_file=args.auto_hst_file,
-                         hst_files=args.hst_files, point=args.point, entry=args.entry, output=args.output)
+        configure_data_source(
+            cache=args.cache,
+            refresh=args.refresh,
+            auto_hst_file=args.auto_hst_file,
+        )
+        cli_save_events(
+            args.filename,
+            args.path,
+            hst_files=args.hst_files,
+            point=args.point,
+            entry=args.entry,
+            output=args.output,
+        )
     else:
         parser.print_help()
 
