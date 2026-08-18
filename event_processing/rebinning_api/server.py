@@ -237,9 +237,11 @@ def get_frame_range(measurement, bins, start, end):
 @app.post("/timebin/nexus")
 def get_timebin_nexus(request: models.SummaryTimeRequest):
     data = get_nexus(request.measurement, request.bins)
-    reply = models.NexusReply(
-        base64_data=base64.b64encode(data),
-    )
+    filename = Path(request.measurement.filename)
+    outfile = f"{filename.stem}_rebinned{'.zip' if request.split else filename.suffix}"
+    mimetype = "application/zip" if request.split else "application/x-hdf5",
+
+    reply = models.NexusReply(mimetype=mimetype, filename=outfile, base64_data=base64.b64encode(data))
     return reply
 
 COMPLETED_DOWNLOADS = deque(maxlen=DOWNLOAD_HISTORY_SIZE)
@@ -355,7 +357,7 @@ async def download_events_form(request_str: Annotated[str, Form()], download_id:
         raise e
 
 
-def get_nexus(measurement: models.Measurement, bins):
+def get_nexus(measurement: models.Measurement, bins, split: bool = False):
     """
     Helper for nexus writer endpoints, which takes the binned detectors, etc.
     and produces an updated nexus file.
@@ -582,7 +584,7 @@ def configure_data_source(cache: str = None, refresh: bool = False, auto_hst_fil
     data_cache.configure(CACHE_ROOT)
     event_cache.configure(CACHE_ROOT)
 
-def cli_rebin(filename: str, path: str, preview: bool = False, interval: int = None, nbins: int = None, events_file: str = None):
+def cli_rebin(filename: str, path: str, preview: bool = False, interval: int = None, nbins: int = None, events_file: str = None, split: bool = False):
     """Handles the CLI execution for rebinning or launching the preview."""
     if preview:
         import webbrowser
@@ -604,21 +606,17 @@ def cli_rebin(filename: str, path: str, preview: bool = False, interval: int = N
     else:
         print(f"Generating {nbins or 10} bins...")
     bins = client.time_linbins(metadata, interval=interval, nbins=nbins)
-    request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
+    request = models.SummaryTimeRequest(measurement=measurement, bins=bins, split=split)
 
-    print("Processing events and generating Nexus file (this may take a moment)...")
+    print("Processing events and generating Nexus output (this may take a moment)...")
     try:
-        hdf = get_timebin_nexus(request)
-    except FileNotFoundError as e:
-        print(f"Warning: {e}")
+        reply = get_timebin_nexus(request)
+    except Exception as exc:
+        print(f"{exc}")
         sys.exit(1)
-
-    # Save the file
-    out_filename = f"{Path(filename).stem}_rebinned{Path(filename).suffix}"
-    with open(out_filename, 'wb') as fd:
-        fd.write(base64.b64decode(hdf.base64_data))
-
-    print(f"Success! Rebinned file saved to ./{out_filename}")
+    with open(reply.filename, 'wb') as fd:
+        fd.write(base64.b64decode(reply.base64_data))
+    print(f"Success! Rebinned file saved to ./{reply.filename}")
 
 def cli_save_events(filename: str, path: str, hst_files: list[str] = None, point: int = 0, entry: int = 0, output: str = None):
     """Handles the CLI execution for fetching, cleaning, and persisting events without binning."""
@@ -709,6 +707,7 @@ def main():
     parser_rebin_bins.add_argument('--interval', type=int, default=None, help='Bin interval.')
     parser_rebin_bins.add_argument('--nbins', type=int, default=None, help='Number of bins (default: 10, used when neither --interval nor --nbins is given).')
     parser_rebin.add_argument('--events-file', type=str, default=None, help='Reload cleaned events from a previously saved events+nexus file (see "save-events") instead of fetching them live.')
+    parser_rebin.add_argument('--split', action='store_true', help='Write a per‑bin ZIP archive (uses nexus_zip) instead of a single rebinned file.')
 
     # --- Command: save-events ---
     parser_save_events = subparsers.add_parser('save-events', parents=[data_source_args], help='Fetch, clean, and persist events for a measurement without binning.')
@@ -763,6 +762,7 @@ def main():
             preview=args.preview,
             interval=args.interval,
             nbins=args.nbins,
+            split=args.split,
         )
     elif args.command == "save-events":
         configure_data_source(

@@ -1,5 +1,7 @@
 import io
 import logging
+import zipfile
+from pathlib import Path
 
 import h5py
 
@@ -28,37 +30,113 @@ def nexus_entries(nexus):
     #print({k: list(v.attrs.items()) for k, v in nexus.items()})
     return list(k for k, v in nexus.items() if v.attrs['NX_class'] == 'NXentry')
 
-def nexus_dup(entry, binned, bins):
-    #print("counts", counts)
-    detectors = binned['detectors']
-    replacement_target = nexus_detector_replacement(entry)
-    replacement = {
-        v: detectors[k] for k, v in replacement_target.items()
-    }
-    count_time = entry["control/count_time"]
-    replacement[count_time.attrs["target"]] = binned['count_time']
-    if 'monitors' in binned:
-        monitor_counts = entry["control/monitor_counts"]
-        replacement[monitor_counts.attrs["target"]] = binned['monitors']
-    # TODO: device values not offered up as replacements
+def nexus_dup(entry, binned, bins, bin_number=None):
+    """Return a NeXus file (bytes).
 
-    bio = io.BytesIO()
-    with h5py.File(bio, "w") as target:
-        hdf_copy(entry.parent, target, replacement)
-        record_bins(target[entry.name], bins)
-    data = bio.getvalue()
-    bio.close()
+    * If ``bin_number`` is ``None`` (default) the function behaves exactly like the
+      original implementation – it writes the full 3‑D detector arrays, the full
+      ``count_time`` vector and the full ``monitor_counts`` (if present).
+    * If ``bin_number`` is an ``int`` the file contains **only the data for that
+      single bin**:
+        - detector datasets are sliced to ``det_array[bin_number]`` (2‑D)
+        - ``count_time`` becomes a scalar dataset containing the ``k``‑th element
+        - ``monitor_counts`` (if present) becomes a scalar with the ``k``‑th value
+        - a ``bin_number`` scalar is also written via ``record_bins``
+    """
+    def select_bin_or_bins(data):
+        """Return the entire data array or the target bin if bin_number is not None"""
+        return data if bin_number is None else data[bin_number]
+
+    # Search each detector group for the DASlogs link containing the counts.
+    # Record replacement = {link: data}, but only if there are binned events for the detector.
+    detector_links = nexus_detector_replacement(entry)
+    detectors = binned['detectors']
+    replacement = {
+        link: select_bin_or_bins(detectors[name]) for name, link in detector_links.items()
+        if name in detectors  # ... only if the detector event data is available
+    }
+
+    # count_time – either full vector if no bin number or scalar for a single bin
+    field = entry["control/count_time"]
+    replacement[field.attrs["target"]] = select_bin_or_bins(binned['count_time'])
+
+    # optional monitor_counts – same logic as count_time
+    if 'monitors' in binned:
+        field = entry["control/monitor_counts"]
+        replacement[field.attrs["target"]] = select_bin_or_bins(binned['monitors'])
+
+    # TODO: need to average temperature per frame, etc., from binned['devices']
+
+    # Write the in‑memory HDF5 file
+    fd_mem = io.BytesIO()
+    with h5py.File(fd_mem, "w") as h5out:
+        hdf_copy(entry.parent, h5out, replacement)
+        record_bin_edges(h5out[entry.name], bins, bin_number=bin_number)
+    data = fd_mem.getvalue()
+    fd_mem.close()
+
     return data
 
-def record_bins(entry, bins):
+
+def nexus_zip(entry, binned, bins):
+    """Create a ZIP archive where each entry is a single‑bin NeXus file.
+
+    For each bin index *k* we reuse :func:`nexus_dup` with ``bin_number=k`` so the
+    per‑frame file contains:
+        * a 2‑D detector slice for that bin
+        * a scalar ``count_time`` for the *k*‑th bin duration
+        * a scalar ``monitor_counts`` (if present)
+        * the ``bin_number`` dataset written by ``record_bins``
+    The filename inside the archive is derived from the original Nexus file name:
+    ``entry['/'].attrs['file_name']`` (if present).  The bin number is inserted
+    before the first extension using a five‑digit zero‑padded representation
+    (e.g. ``myfile_00003.nxs.ngv``).  If the attribute is missing we fall back to
+    the entry group's name.
+    """
+    # Resolve the base filename from the root group's attribute if it exists
+    file_name = entry["/"].attrs.get("file_name", "bin.nxs")
+
+    # Split into stem and suffixes (preserve multi‑part suffixes like .nxs.ngv)
+    p = Path(file_name)
+    suffixes = "".join(p.suffixes)
+    stem = p.name[:-len(suffixes)] if suffixes else p.name
+
+    num_bins = len(bins.edges) - 1
+    zip_io = io.BytesIO()
+    with zipfile.ZipFile(zip_io, mode="w", compression=zipfile.ZIP_DEFLATED) as zipf:
+        for k in range(num_bins):
+            bin_bytes = nexus_dup(entry, binned, bins, bin_number=k)
+            zip_name = f"{stem}_{k:05d}{suffixes}"
+            zipf.writestr(zip_name, bin_bytes)
+    return zip_io.getvalue()
+
+
+def record_bin_edges(entry, bins, bin_number=None):
+    """Record bin edges and mode. Optionally store the bin index for per‑frame files.
+
+    Parameters
+    ----------
+    entry: h5py.Group
+        The NeXus entry being written.
+    bins: models.Bins
+        The binning definition.
+    bin_number: int | None
+        If provided, a scalar dataset ``bin_number`` is written to the
+        ``control`` group so each per‑frame file knows its index.
+    """
     # TODO: Consider storing the binning info in each detector
     # TODO: Add the appropriate NeXus metadata to the fields
     # TODO: Add masking info, etc.
     control = entry["control"]
-    edges = control.create_dataset("bin_edges", data=bins.edges)
-    edges.attrs["units"] = "seconds"
-    edges.attrs["long_name"] = f"bin edges for {bins.mode} binned data"
-    control.create_dataset("bin_mode", data=bins.mode)
+    field = control.create_dataset("bin_edges", data=bins.edges)
+    field.attrs["units"] = "seconds"
+    field.attrs["long_name"] = f"bin edges for {bins.mode} binned data"
+    field = control.create_dataset("bin_mode", data=bins.mode)
+    field.attrs["long_name"] = "binning mode used to create the histogram"
+    if bin_number is not None:
+        # store as a scalar int dataset – easy to read downstream
+        field = control.create_dataset("bin_number", data=bin_number)
+        field.attrs["long_name"] = "0-origin bin number stored in this entry"
 
 def nexus_detector_replacement(entry):
     """

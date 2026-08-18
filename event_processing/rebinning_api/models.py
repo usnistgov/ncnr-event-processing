@@ -204,6 +204,7 @@ class TriggerReply(BaseModel):
 class SummaryTimeRequest(BaseModel):
     measurement: Measurement
     bins: TimeBins
+    split: bool = False  # When true, return a ZIP of per‑bin Nexus files
 
 class SummaryReply(BaseModel):
     measurement: Measurement
@@ -246,7 +247,12 @@ class FrameReply(BaseModel):
     data: dict[str, array]
 
 class NexusReply(BaseModel):
+    mimetype: str
+    """Mimetype for the file (zip or x-hdf5)"""
+    filename: str
+    """Suggested filename"""
     base64_data: str
+    """Binary data for the file content"""
 
 class LogRequest(BaseModel):
     """
