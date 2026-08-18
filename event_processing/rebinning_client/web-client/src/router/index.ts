@@ -1,4 +1,3 @@
-import { route } from 'quasar/wrappers';
 import {
   createMemoryHistory,
   createRouter,

@@ -2,7 +2,7 @@ import numpy as np
 import logging
 import typing
 
-from .util import travel_time, get_partition, neutron_velocity
+from .util import travel_time, get_partition, FWHM_to_sigma
 if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager
 
@@ -17,6 +17,7 @@ def to_detector_indices(pixel_ids: np.ndarray):
     x = pixel_ids >> 16
     y = pixel_ids & 0xFFFF
     return x, y
+
 
 def get_pixel_distances(entry):
     """
@@ -89,16 +90,22 @@ def get_pixel_distances(entry):
 
     return distances
 
+def _concat_or_reuse(arrays: list[np.ndarray]) -> np.ndarray:
+    # np.concatenate always makes a copy, even for a single-element list.
+    # For large (>1e8 event) detectors avoid that redundant full-size copy
+    # in the common case where there is nothing to concatenate.
+    return arrays[0] if len(arrays) == 1 else np.concatenate(arrays)
+
 def cleanup(entry, raw_events: "EventsManager", datapath=""):
     make_table = False
     cycle = "*"
-    proposal = entry["DAS_logs/experiment/proposalId"][0]
-    filename = entry["DAS_logs/trajectoryData/fileName"][0]
-    instrument = entry["instrument/name"][0]
+    # proposal = entry["DAS_logs/experiment/proposalId"][0]
+    # filename = entry["DAS_logs/trajectoryData/fileName"][0]
+    # instrument = entry["instrument/name"][0]
 
-    start = raw_events.start
+    start = raw_events.start[0]
     wavelength = entry["instrument/monochromator/wavelength"][0]
-    wavelength_spread = entry["instrument/monochromator/wavelength_error"][0]
+    wavelength_spread_FWHM = entry["instrument/monochromator/wavelength_error"][0]
     #print(f"{wavelength=} {wavelength_spread=}")
     detector_partitions = raw_events.get_detectors()
 
@@ -119,24 +126,45 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
         dims = tuple(DAS['dimension'][()])
 
         list_of_timestamp_arrays: list[np.ndarray] = event_pairs["timestamp"]
-        list_of_pixel_id_arrays: list[np.ndarray] = event_pairs["value"]
         # Concatenate the arrays into single arrays
-        times = np.concatenate(list_of_timestamp_arrays)
-        pixel_ids = np.concatenate(list_of_pixel_id_arrays)
+        times = _concat_or_reuse(list_of_timestamp_arrays)
+        if "x" in event_pairs:
+            # Already-split x/y, e.g. from a replayed .hst file where
+            # tubeID/pixel are stored as separate columns: use them directly
+            # rather than packing into a pixel_id here only to unpack again
+            # below.
+            x = _concat_or_reuse(event_pairs["x"])
+            y = _concat_or_reuse(event_pairs["y"])
+            pixel_ids = None
+        else:
+            # Live-stream format: a single packed pixel_id per event
+            # (tubeID << 16 | pixel), matching the kafka wire format.
+            pixel_ids = _concat_or_reuse(event_pairs["value"])
+            x, y = to_detector_indices(pixel_ids)
 
-        x, y = to_detector_indices(pixel_ids)
-        
-        distance_map = get_pixel_distances(entry)
-        distance = distance_map[x,y]
+        distance_table = get_pixel_distances(entry)
+        travel_time_table = np.floor(travel_time(distance_table, wavelength)).astype(np.int64)
+        time_correction = travel_time_table[x, y]
 
-        time_correction = travel_time(distance, wavelength)
-        time_correction_sigma = (time_correction * wavelength_spread / wavelength).astype(int)
+        sigma_factor = wavelength_spread_FWHM * FWHM_to_sigma
+        ts_sigma_stats = {
+            "mean": time_correction.mean() * sigma_factor,
+            "max": int(time_correction.max() * sigma_factor),
+            "min": int(time_correction.min() * sigma_factor),
+        }
+
+        times -= time_correction
+        times -= start
+
+        index = np.argsort(times, kind="stable")
+        times = times[index]
+        x = x[index]
+        y = y[index]
 
         if not ((x>=0).all() and (x<dims[0]).all() and (y>=0).all() and (y<dims[1]).all()):
             raise RuntimeError(f"Bad pixel id in {datapath}: x = {x.min()}:{x.max()} y = {y.min()}:{y.max()}")
-    
-        times -= time_correction.astype(int)
-        detectors[name] = dict(dims=dims, ts=times, ts_sigma=time_correction_sigma, x=x, y=y)
+
+        detectors[detector_name] = dict(dims=dims, ts=times, ts_sigma_stats=ts_sigma_stats, x=x, y=y)
 
     monitors = raw_events._fields.get("monitors", [])
     if monitors:

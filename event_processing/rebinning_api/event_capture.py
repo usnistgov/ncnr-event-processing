@@ -116,22 +116,19 @@ import warnings
 from kafka import KafkaConsumer, TopicPartition
 from kafka.consumer.fetcher import ConsumerRecord
 import kafka.structs
-# import fastavro
-# import avro
-# import avro.io
 import avroc
 import numpy as np
 
-if os.environ.get("USE_CONFLUENT", False):
-    from .confluent_connector import kafka_consumer, stream_history
-    logging.info("Using confluent-kafka connector")
-else:
-    from .kafka_python_connector import kafka_consumer, stream_history
-    logging.info("Using kafka-python connector")
 
+# Use the logger from uvicorn so we get pretty formatting
+logger = logging.getLogger("uvicorn.error")
+
+from .confluent_connector import kafka_consumer, stream_history
 from . import nexus_util
 from . import data_cache
 from . import cleanup
+from . import rebin_vsans_old
+from . import util
 
 REDPANDA_IP = "129.6.10.216"
 REDPANDA_STREAM_PORT = '9092'
@@ -153,7 +150,6 @@ def get_schema(schema_id: int):
 def get_decoder(schema_id: int):
     if schema_id == 2:
         return numba_decoder_2(schema_id)
-        # return pyruhvro_decoder(schema_id)
 
     schema = get_schema(schema_id)
     return avro_decoder(schema)
@@ -162,32 +158,9 @@ def avro_decoder(schema):
     from types import SimpleNamespace
     reader = avroc.compile_decoder(json.loads(schema))
     def decoder(message: ConsumerRecord):
-        with BytesIO(message.value) as fd:
+        with BytesIO(message.value()) as fd:
             return reader(fd)
             #return SimpleNamespace(**data) # doesn't work for nested structures
-    return decoder
-
-def fastavro_decoder(schema):
-    def decoder(message):
-        with BytesIO(message.value) as fd:
-            return fastavro.read.schemaless_reader(fd, schema)
-    return decoder
-
-def pyruhvro_decoder(schema_id):
-    from pyruhvro import deserialize_array
-
-    schema = get_schema(schema_id)
-
-    def decoder(message):
-        batches = deserialize_array([message.value], schema)
-        arrow_array = batches[0]
-        struct_array = arrow_array.flatten()
-        timestamps = struct_array.field("timestamp").to_numpy()
-        pixel_ids = struct_array.field("pixel_id").to_numpy()
-        return {
-            "timestamp": message.timestamp,
-            "neutrons": [ {"timestamp": timestamps, "pixel_id": pixel_ids } ]
-        }
     return decoder
 
 def numba_decoder_2(schema_id: int):
@@ -207,12 +180,22 @@ def numba_decoder_2(schema_id: int):
 
 
 class CleanedEvents(TypedDict):
-    ts: np.ndarray # timestamps, ns
-    ts_sigma: np.ndarray # uncertainty in timestamps, ns
-    x: np.ndarray # x pixel index
-    y: np.ndarray # y pixel index
-    dims: tuple[int,int] # (nrows, ncols) for the detector
+    """
+    Generic 2D detector event after translation from detector specific pixel id.
 
+    For the physical location of the pixel use *{x,y}_pixel_{size,offset}* from
+    the corresponding NXdetector group in the NeXus file.
+    """
+    ts: np.ndarray
+    """timestamps (int64 ns)"""
+    ts_sigma: np.ndarray
+    """uncertainty in timestamps (ns)"""
+    x: np.ndarray
+    """pixel row index, not the x-position on the 2D detector image (int32)"""
+    y: np.ndarray
+    """pixel column index, not the y-position on the 2D detector image (int32)"""
+    dims: tuple[int,int]
+    """detector grid size (nx, ny) = (nrows,ncolumns)"""
 
 class EventsManager:
     """
@@ -322,8 +305,8 @@ class EventsManager:
     def _create_or_extend_pairs(self, name, timestamp: np.ndarray, value: np.ndarray):
         #print("extend {name} pairs", events)
         data = self._fields.setdefault(name, {"timestamp": [], "value": []})
-        data["timestamp"].extend(timestamp)
-        data["value"].extend(value)
+        data["timestamp"].append(timestamp)
+        data["value"].append(value)
 
 
 def event_cleanup(entry, raw_events, datapath=""):
@@ -334,7 +317,7 @@ def event_cleanup(entry, raw_events, datapath=""):
     of flight from sample to detector. (when completed) we will convert detector pixels
     into numpy arrays with zero indexing into a compact array
     """
-    instrument = lookup_instrument(entry)
+    instrument = util.lookup_instrument(entry)
     cleanup_fn = cleanup.CLEANUP_FNS.get(instrument, None)
     if cleanup_fn is not None:
         return cleanup_fn(entry, raw_events, datapath=datapath)
@@ -355,11 +338,11 @@ def get_schema_id_confluent_prefix(message: ConsumerRecord):
         #     and this will have length < 5
 
         schema_id = int.from_bytes(message.value[1:5], byteorder='big', signed=True)
-        logging.debug(f"getting schema_id from confluent payload header: {schema_id} (message bytes: {message.value})")
+        logger.debug(f"getting schema_id from confluent payload header: {schema_id} (message bytes: {message.value})")
     else:
         # no schema ID, so use the default schema version
         schema_id = DEFAULT_SCHEMA_VERSION
-        logging.debug(f"using default schema version: {schema_id}")
+        logger.debug(f"using default schema version: {schema_id}")
     return schema_id
 
 def get_schema_id(message: ConsumerRecord, default: int):
@@ -371,14 +354,14 @@ def get_schema_id(message: ConsumerRecord, default: int):
     Header message format: ("v", <byte>) where the byte value is to be interpreted
     as uint8 (schema version)
     """
-    headers = message.headers
+    headers = message.headers()
     if headers is not None:
         for key, value in headers:
             if key == "v":
                 schema_id = int.from_bytes(value, byteorder='little', signed=False)
-                logging.debug(f"getting schema_version from kafka message header: {schema_id}")
+                logger.debug(f"getting schema_version from kafka message header: {schema_id}")
                 return schema_id
-    logging.debug(f"no schema id found")
+    logger.debug(f"no schema id found")
     return default
 
 def process_trigger(message, db: EventsManager):
@@ -400,6 +383,46 @@ def process_detector(message: ConsumerRecord, db: EventsManager):
     pixel_id = np.asarray([n['pixel_id'] for n in record['neutrons']], dtype='int64')
     detector = f"detector_{message.partition}"
     db.counts(detector, timestamp, pixel_id)
+
+def process_detector_batch(messages: list, db: EventsManager, gate_on_ns: int, gate_off_ns: int):
+    """Processes a batch of native messages, optimizing for Numba"""
+    if not messages:
+        return
+        
+    # Assume the schema is uniform across a single batch on a specific topic
+    schema_id = get_schema_id(messages[0], default=2)
+    if schema_id != 2:
+        raise NotImplementedError("Batch processing only supports schema_id == 2")
+
+
+    from .decoders import parse_neutron_batch_gated_metrics
+    
+    # 1. Group payloads by partition
+    partition_buffers = {}
+    for msg in messages:
+        buf = msg.value()
+        if buf:
+            # If using kafka-python, use msg.partition instead of msg.partition()
+            pid = msg.partition() if callable(msg.partition) else msg.partition
+            partition_buffers.setdefault(pid, []).append(buf)
+            
+    # 2. Process each partition via Numba
+    for pid, buffers in partition_buffers.items():
+        raw_bytes = b''.join(buffers)
+        
+        # Fire the Numba gated batch decoder
+        timestamp, pixel_id, num_before, num_after = parse_neutron_batch_gated_metrics(
+            np.frombuffer(raw_bytes, dtype=np.uint8), 
+            gate_on_ns, 
+            gate_off_ns
+        )
+        
+        # Write to db if any neutrons survived the filter
+        if len(timestamp) > 0:
+            detector = f"detector_{pid}"
+            db.counts(detector, timestamp, pixel_id)
+            logger.debug(f"PROFILING: {len(timestamp)} neutrons in {len(buffers)} packets (rejected: {num_before} before, {num_after} after)")
+
 
 def process_monitor(message, db: EventsManager):
     # monitor schema is neutron_detector-value schema (2)
@@ -442,7 +465,7 @@ def process_message(message: ConsumerRecord, db: EventsManager):
 
         # Safety gate: If the topic suffix is not handled (like 'sync'), ignore it safely
         if topic_suffix not in PROCESSOR:
-            logging.error(f"Skipping unhandled topic processor suffix: {topic_suffix} for topic {message.topic}")
+            logger.error(f"Skipping unhandled topic processor suffix: {topic_suffix} for topic {message.topic}")
             return
 
         processor = PROCESSOR[topic_suffix]
@@ -459,16 +482,6 @@ def parse_timestamp(field):
     dt = datetime.fromisoformat(timestamp)
     return int(dt.timestamp()*1000)
 
-INSTRUMENTS = {
-    'NG3-VSANS': 'vsans',
-    'NCNR Candor': 'candor',
-    'SANS:NGB30': 'ngb30msans',
-    'SANS:NG7': 'ng7sans',
-    }
-
-def lookup_instrument(entry):
-    name = entry['instrument/name'][0].decode('utf8')
-    return INSTRUMENTS[name]
 
 #def cache_filename(instrument, timestamp):
 #    dt = datetime.fromtimestamp(timestamp)
@@ -490,14 +503,38 @@ def run_fetch(files):
             fetch_events_for_file(consumer, filename)
 
 def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
-    print("fetching events for", filename)
-    nexus = data_cache.load_nexus(filename)
+    logger.debug("fetching events for", filename)
     dbs = []
+    try:
+        nexus = data_cache.load_nexus(filename, datapath)
+    except Exception as exc:
+        logger.error(f"Could not load {datapath}/{filename}:\n   {exc}")
+        return dbs
     try:
         for entry_name in nexus_util.nexus_entries(nexus):
             entry = nexus[entry_name]
             for point, _start in enumerate(entry['DAS_logs/counter/startTime']):
                 point_events = _fetch_events_for_point(consumer, entry, point)
+                if cleanup:
+                    event_cleanup(entry, point_events, datapath=datapath)
+                dbs.append(point_events)
+    finally:
+        nexus.close()
+    return dbs
+
+# Note: fetch_hst_... differs from fetch_events_... in that it uses rebin_vsans_old() to retrieve events
+def fetch_hst_for_file(filename, datapath="", cleanup=True):
+    dbs = []
+    try:
+        nexus = data_cache.load_nexus(filename, datapath)
+    except Exception as exc:
+        logger.error(f"Could not load {datapath}/{filename}:\n   {exc}")
+        return dbs
+    try:
+        for entry_name in nexus_util.nexus_entries(nexus):
+            entry = nexus[entry_name]
+            for point, _start in enumerate(entry['DAS_logs/counter/startTime']):
+                point_events = rebin_vsans_old.events_manager_from_files(entry)
                 if cleanup:
                     event_cleanup(entry, point_events, datapath=datapath)
                 dbs.append(point_events)
@@ -531,11 +568,11 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         disarm_time = entry_start_time + (entry['DAS_logs/counter/stopTime'][point] + 0.5) * 1000 # s -> ms
         arm_time = int(arm_time * 1e6) # ms -> ns
         disarm_time = int(disarm_time * 1e6) # ms -> ns
-        print(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {entry_start_time}")
+        logger.warning(f"no eventStartTime found, using startTime={arm_time}, stopTime={disarm_time}, {entry_start_time}")
     else:
         arm_time = entry["DAS_logs/counter/eventStartTime"][point]
         disarm_time = entry["DAS_logs/counter/eventStopTime"][point]
-    instrument = lookup_instrument(entry)
+    instrument = util.lookup_instrument(entry)
     #print(f"{instrument=}")
     # TODO: use nexus filename plus point number for easier file management
     # TODO: EventsManager is no longer caching
@@ -568,38 +605,39 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # TODO: need to keep track of previously retrieved offsets so we don't
     # have to search the whole stream, can put bounds (sqlite?)
     stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=500)
-    for message in stream:
-        schema_id = get_schema_id(message, default=1)
-        decoder = get_decoder(schema_id)
-        record = decoder(message)
-        # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
-        if record['timestamp'] < arm_time:
-            continue
-        if record['timestamp'] > disarm_time:
-            break
-        if record['syncType'] == "GATE_ON":
-            # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
-            # print("GATE_ON", message, record)
-            start_times.append(record['timestamp'])
-        elif record['syncType'] == "GATE_OFF":
-            # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
-            # print("GATE_OFF", message, record)
-            stop_times.append(record['timestamp'])
-        elif record['syncType'] == "TO_SYNC":
-            db.trigger(record['timestamp'])
-        else:
-            raise ValueError(f"Unknown trigger type {record['syncType']}")
+    for message_batch in stream:
+        for message in message_batch:
+            schema_id = get_schema_id(message, default=1)
+            decoder = get_decoder(schema_id)
+            record = decoder(message)
+            # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
+            if record['timestamp'] < arm_time:
+                continue
+            if record['timestamp'] > disarm_time:
+                break
+            if record['syncType'] == "GATE_ON":
+                # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
+                # print("GATE_ON", message, record)
+                start_times.append(record['timestamp'])
+            elif record['syncType'] == "GATE_OFF":
+                # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
+                # print("GATE_OFF", message, record)
+                stop_times.append(record['timestamp'])
+            elif record['syncType'] == "TO_SYNC":
+                db.trigger(record['timestamp'])
+            else:
+                raise ValueError(f"Unknown trigger type {record['syncType']}")
 
     if len(start_times) != len(stop_times):
         warnings.warn(f"Gate mismatch: {len(start_times)} GATE_ON, {len(stop_times)} GATE_OFF found in [{arm_time}-{disarm_time}]")
 
     if not start_times:
         #no gate_on found, use arm_time
-        logging.warning(f"no GATE_ON found, using arm_time={arm_time}")
+        logger.warning(f"no GATE_ON found, using arm_time={arm_time}")
         start_times = [arm_time] # fall back to arm time if no start_time in stream
     if not stop_times:
         #no gate_off found, use disarm_time
-        logging.warning(f"no GATE_OFF found, using disarm_time={disarm_time}")
+        logger.warning(f"no GATE_OFF found, using disarm_time={disarm_time}")
         stop_times = [disarm_time] # fall back to disarm time if no stop_time in stream
     
     db.set_times(start_times, stop_times, arm_time, disarm_time)
@@ -608,21 +646,28 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         # start_us, stop_us = db.start // 1000, db.stop // 1000 # ns -> μs
         start_ms, stop_ms = start_time // 1000000, stop_time // 1000000 # ns -> ms
         if stop_ms < start_ms:
-            print(f"{instrument} {start_ms} {stop_ms}")
+            logger.debug(f"{instrument} {start_ms} {stop_ms}")
             raise RuntimeError(f"No counter disarm for entry {entry}")
-        for channel in ('monitor', 'detector'):
+        for channel in ('detector',): # no monitor yet
             topic = f"{instrument}_{channel}"
             total, n = 0, 0
 
             t_start = time.perf_counter_ns()
             stream = stream_history(consumer, topic, start_ms, stop_ms, timeout_ms=timeout_ms)
-            for message in stream:
+            for message_batch in stream:
                 t0 = time.perf_counter_ns()
-                process_message(message, db)
+                topic_suffix = topic.rsplit('_', 1)[-1]
+                if topic_suffix == 'detector':
+                    process_detector_batch(message_batch, db, gate_on_ns=start_time, gate_off_ns=stop_time)
+                    n += len(message_batch)
+                else:
+                    for msg in message_batch:
+                        PROCESSOR[topic_suffix](msg, db)
+                        n += 1
+
                 total += time.perf_counter_ns() - t0
-                n += 1
             with_kafka = time.perf_counter_ns() - t_start
-            print(f"Processing time for {n} messages in {topic} is {total/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
+            logger.info(f"Processing time for {n} messages in {topic} is {with_kafka/1e6:.2f} ms, kafka = {(with_kafka-total)/1e6:.2f} ms")
 
     db.close()
     return db
@@ -761,10 +806,10 @@ def live_stream(instrument, sync=1000):
                 if record['trigger'] == GATE_CLOSE:
                     if db is not None:
                         db.close()
-                        logging.warn(f"{filename} DISARM not received.")
+                        logger.warn(f"{filename} DISARM not received.")
                     sync_time = record['timestamp'] / 1e9 # ns
                     filename = cache_filename(instrument, sync_time)
-                    print(f"caching {filename}")
+                    logger.debug(f"caching {filename}")
                     db = EventsManager(CACHE_ROOT / filename)
                     # Fall through to process ARM record
                 # Other condition is a T0 record. This, too, can fall through

@@ -122,12 +122,32 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     
     # combine events for all partitions (only one detector in nexus)
     if result["dims"] is not None:
+        if result["ts"]:
+            unsorted_ts = np.concatenate(result["ts"])
+            # stable argsort uses radix sort for int64
+            index = unsorted_ts.argsort(kind="stable")
+            ts = unsorted_ts[index]
+            x = np.concatenate(result["x"])[index] if result["x"] else np.zeros_like(ts, dtype='int32')
+            y = np.concatenate(result["y"])[index] if result["y"] else np.zeros_like(ts, dtype='int32')
+            # no reason to sort ts_sigma - only to be used to get stats
+            ts_sigma = np.concatenate(result["ts_sigma"]) if result["ts_sigma"] else np.zeros_like(ts, dtype='int64')
+        else:
+            ts = np.zeros(0, dtype='int64')
+            x = np.zeros(0, dtype='int32')
+            y = np.zeros(0, dtype='int32')
+            ts_sigma = np.zeros(0, dtype='int64')
+
         combined = dict(
             dims=result["dims"],
-            ts=np.concatenate(result["ts"]) if result["ts"] else np.zeros(0, dtype='int64'),
-            ts_sigma=np.concatenate(result["ts_sigma"]) if result["ts_sigma"] else np.zeros(0, dtype='int64'),
-            x=np.concatenate(result["x"]) if result["x"] else np.zeros(0, dtype='int64'),
-            y=np.concatenate(result["y"]) if result["y"] else np.zeros(0, dtype='int64'),
+            ts=ts,
+            x=x,
+            y=y,
+            ts_sigma_stats = {
+                "mean": float(ts_sigma.mean()),
+                "std": float(ts_sigma.std()),
+                "min": int(ts_sigma.min()),
+                "max": int(ts_sigma.max()),
+            }
         )
         detectors["multiDetector"] = combined
     raw_events._cleaned_fields = events

@@ -8,26 +8,40 @@ authors = [
 ]
 dependencies = [
     "fastapi",
+    "uvicorn",
     "h5py",
+    "hdf5plugin",
     "msgpack",
     "numpy",
+    "pydantic",
     "requests",
     "plotly",
     "nicegui",
     "kafka-python",
-    "fastavro",
-    "avro",
     "avroc",
     "pylru",
-    "scipy"
+    "scipy",
+    "numba",
+    "psutil",
+    "diskcache"
 ]
+
+[project.scripts]
+event-processing = "event_processing.rebinning_api.server:main"
 
 [project.optional-dependencies]
 dev = [
 ]
+confluent = [
+    "confluent-kafka"
+]
+torch = [
+    "torch"
+]
 
 [build-system]
 requires = ["setuptools>=61.2"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["event_processing"]

@@ -1,16 +1,23 @@
 import io
+import logging
+
 import h5py
 
 from . import models
 from . import data_cache
 
-def open_nexus_entry(measurement: models.Measurement):
+
+# Use the logger from uvicorn so we get pretty formatting
+logger = logging.getLogger("uvicorn.error")
+
+
+def open_nexus_entry(measurement: models.Measurement, refresh: bool = False) -> h5py.Group|None:
     point = measurement.point
     path, filename = measurement.path, measurement.filename
     entry_number = measurement.entry
 
     # TODO: we should only have one cache, not four (nexus files, event files, binned data, live date)
-    nexus = data_cache.load_nexus(filename, datapath=path)
+    nexus = data_cache.load_nexus(filename, datapath=path, refresh=refresh)
     entries = nexus_entries(nexus)
     #print("entries", entries)
     entry_name = entries[entry_number]

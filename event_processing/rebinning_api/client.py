@@ -1,5 +1,5 @@
 import base64
-from dataclasses import asdict
+import logging
 
 import requests
 import numpy as np
@@ -25,13 +25,19 @@ def get_rebinned():
 def post(endpoint, request):
     url = f"{HOST}/{endpoint}"
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    #print("post", endpoint, request)
+    # print("post", HOST, endpoint, request)
     data = request.model_dump_json()
-    r = requests.post(url, data=data, headers=headers)
+    try:
+        r = requests.post(url, data=data, headers=headers)
+    except Exception as exc:
+        logging.error(f"Exception raised during POST {url} with {data}\n   {exc}")
+        raise
     # result = unpackb(r.content)['result']
-    if r.status_code != 200:
-        raise r.raise_for_status()
     result = r.json()
+    if r.status_code != 200:
+        msg = f"POST {r.url} {r.status_code} {r.reason} : {result.get('detail', 'unknown reason')}"
+        logging.error(msg)
+        raise r.raise_for_status()
     return result
 
 def get_metadata(filename, path=None, point=0):
@@ -77,7 +83,7 @@ def get_nexus(metadata, bins):
     return models.NexusReply(**reply)
 
 
-def time_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=0):
+def time_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0):
     # TODO: not sure if it is a good idea to make time bins contingent on mask
     # Reasons against: if you are applying the same bins across a number of
     # measurements but one of them has a bad region of data, you don't want the
@@ -93,7 +99,9 @@ def time_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=
             start = mask_start
         if end is None:
             end = mask_end
-    edges = _lin_edges(metadata.duration, start, end, interval)
+    if interval is None and nbins is None:
+        nbins = 10
+    edges = _lin_edges(metadata.duration, start, end, interval, nbins)
     bins = models.TimeBins(edges=edges, mask=mask)
     return bins
 
