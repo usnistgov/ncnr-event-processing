@@ -127,7 +127,7 @@ from .confluent_connector import kafka_consumer, stream_history
 from . import nexus_util
 from . import data_cache
 from . import cleanup
-from . import rebin_vsans_old
+from . import hst
 from . import util
 
 REDPANDA_IP = "129.6.10.216"
@@ -522,7 +522,7 @@ def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
         nexus.close()
     return dbs
 
-# Note: fetch_hst_... differs from fetch_events_... in that it uses rebin_vsans_old() to retrieve events
+# Note: fetch_hst_... differs from fetch_events_... in that it uses hst to retrieve events
 def fetch_hst_for_file(filename, datapath="", cleanup=True):
     dbs = []
     try:
@@ -534,7 +534,7 @@ def fetch_hst_for_file(filename, datapath="", cleanup=True):
         for entry_name in nexus_util.nexus_entries(nexus):
             entry = nexus[entry_name]
             for point, _start in enumerate(entry['DAS_logs/counter/startTime']):
-                point_events = rebin_vsans_old.events_manager_from_files(entry)
+                point_events = hst.events_manager_from_files(entry)
                 if cleanup:
                     event_cleanup(entry, point_events, datapath=datapath)
                 dbs.append(point_events)

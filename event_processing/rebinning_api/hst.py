@@ -1,3 +1,10 @@
+"""
+Module for loading events from the direct-write event file formats (.hst)
+- Ordela/VAX binary
+- ASCII-hex
+- new MATISSE binary (VSANS, NAS)
+"""
+
 from pathlib import Path
 
 import requests
