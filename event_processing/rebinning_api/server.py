@@ -24,7 +24,7 @@ from fastapi import HTTPException, status
 import numpy as np
 
 from . import models
-from . import rebin_vsans_old
+from . import hst
 from . import nexus_util
 from . import event_capture
 from . import binning
@@ -396,11 +396,11 @@ def ensure_cleaned_events(measurement: models.Measurement, entry, hst_files: lis
         hst_files = LOCAL_HST_FILES
     if hst_files:
         print(f"{tic()-T0:.6f}: loading events from {hst_files}")
-        raw_events = rebin_vsans_old.events_manager_from_paths(entry, hst_files)
+        raw_events = hst.events_manager_from_paths(entry, hst_files)
     elif AUTO_HST_FILE:
         events_folder = CACHE_ROOT / "hst_files"
         print(f"{tic()-T0:.6f}: loading events from {events_folder}")
-        raw_events = rebin_vsans_old.events_manager_from_files(entry, events_folder=events_folder)
+        raw_events = hst.events_manager_from_files(entry, events_folder=events_folder)
     else:
         print(f"{tic()-T0:.6f}: fetching raw events for {entry.file.filename}")
         # event_capture.setup()  # in case it hasn't already been setup for sim
@@ -475,12 +475,12 @@ def _bin_by_time_old_vsans(entry, bins):
     for z, detector in (("front", "FL"), ("middle", "ML")):
         print(f"{tic()-T0:.1f}: fetching", detector)
         eventfile = entry[f'instrument/detector_{detector}/event_file_name'][0].decode()
-        eventpath = rebin_vsans_old.fetch_eventfile("vsans", eventfile)
+        eventpath = hst.fetch_eventfile("vsans", eventfile)
         if not Path(eventpath).exists():
             print("missing", eventpath)
             continue
         print(f"{tic()-T0:.1f}: loading", detector)
-        events = rebin_vsans_old.VSANSEvents(eventpath)
+        events = hst.VSANSEvents(eventpath)
         #events._repeat(10)
         # TODO: correct for time of flight
         # TODO: elide events in mask
