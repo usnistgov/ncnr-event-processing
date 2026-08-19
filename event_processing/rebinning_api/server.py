@@ -363,21 +363,10 @@ def get_nexus(measurement: models.Measurement, bins, split: bool = False):
     binned = bin_events(measurement, bins, summary=False)
     entry = nexus_util.open_nexus_entry(measurement, refresh=REFRESH_CACHE)
     try:
-        if split:
-            data = nexus_util.nexus_zip(entry, binned, bins)
-        else:
-            data = nexus_util.nexus_dup(entry, binned, bins)
+        data, outfile, mimetype = nexus_util.nexus_dup(entry, binned, bins, split=split, filename=measurement.filename)
     finally:
         entry.file.close()
 
-    filename = Path(measurement.filename)
-    # Split into stem and suffixes (preserve multi‑part suffixes like .nxs.ngv)
-    suffixes = "".join(filename.suffixes)
-    stem = filename.name[:-len(suffixes)] if suffixes else filename.name
-    rebinned_name = f"{stem}_rebinned{suffixes}"
-
-    mimetype = "application/zip" if split else "application/x-hdf5"
-    outfile = rebinned_name + ".zip" if split else rebinned_name
     return data, outfile, mimetype
 
 
@@ -616,7 +605,8 @@ def cli_rebin(filename: str, path: str, preview: bool = False, interval: int = N
     try:
         reply = get_timebin_nexus(request)
     except Exception as exc:
-        print(f"{exc}")
+        raise
+        print(f"cli_rebin error: {exc}")
         sys.exit(1)
     with open(reply.filename, 'wb') as fd:
         fd.write(base64.b64decode(reply.base64_data))

@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 import h5py
+from numpy.typing import NDArray
 
 from . import models
 from . import data_cache
@@ -30,88 +31,121 @@ def nexus_entries(nexus):
     #print({k: list(v.attrs.items()) for k, v in nexus.items()})
     return list(k for k, v in nexus.items() if v.attrs['NX_class'] == 'NXentry')
 
-def nexus_dup(entry, binned, bins, bin_number=None):
-    """Return a NeXus file (bytes).
-
-    * If ``bin_number`` is ``None`` (default) the function behaves exactly like the
-      original implementation – it writes the full 3‑D detector arrays, the full
-      ``count_time`` vector and the full ``monitor_counts`` (if present).
-    * If ``bin_number`` is an ``int`` the file contains **only the data for that
-      single bin**:
-        - detector datasets are sliced to ``det_array[bin_number]`` (2‑D)
-        - ``count_time`` becomes a scalar dataset containing the ``k``‑th element
-        - ``monitor_counts`` (if present) becomes a scalar with the ``k``‑th value
-        - a ``bin_number`` scalar is also written via ``record_bins``
+def nexus_dup(
+    entry: h5py.Group,
+    binned: dict[str, NDArray],
+    bins: models.Bins,
+    split: bool = False,
+    filename: str|None = None,
+    compresslevel: int = 4,
+):
     """
-    def select_bin_or_bins(data):
-        """Return the entire data array or the target bin if bin_number is not None"""
-        return data if bin_number is None else data[bin_number:bin_number+1] if len(data.shape) == 1 else data[bin_number]
+    Returns binned events as (data, filename, mimetype).
 
+    The return data is a byte string of mimetype that can be written directly to filename. It may
+    be a NeXus file with all frames in a single entry, or a zip file containing the one NeXus file
+    per frame.
+
+    entry is the base NeXus file entry for the data
+    binned is the data gathered during binning (detector frames, counts, monitors, sample environment)
+    bins are the bin edges
+    split is True if the returned data should be a zip
+    filename is the base name for the zip file entries, or None to use the entry filename.
+    compresslevel is the compression level for the zip file.
+
+    The split format is twice as big and takes several times longer to write.
+    """
     # Search each detector group for the DASlogs link containing the counts.
     # Record replacement = {link: data}, but only if there are binned events for the detector.
     detector_links = nexus_detector_replacement(entry)
     detectors = binned['detectors']
     replacement = {
-        link: select_bin_or_bins(detectors[name]) for name, link in detector_links.items()
+        link: detectors[name] for name, link in detector_links.items()
         if name in detectors  # ... only if the detector event data is available
     }
 
     # count_time – either full vector if no bin number or scalar for a single bin
     field = entry["control/count_time"]
-    replacement[field.attrs["target"]] = select_bin_or_bins(binned['count_time'])
+    replacement[field.attrs["target"]] = binned['count_time']
 
     # optional monitor_counts – same logic as count_time
     if 'monitors' in binned:
         field = entry["control/monitor_counts"]
-        replacement[field.attrs["target"]] = select_bin_or_bins(binned['monitors'])
+        replacement[field.attrs["target"]] = binned['monitors']
 
     # TODO: need to average temperature per frame, etc., from binned['devices']
+
+    # Resolve the base filename from the root group's attribute if it exists
+    # Split into stem and suffixes (preserve multi‑part suffixes like .nxs.ngv)
+    if filename is None:
+        filename = entry["/"].attrs.get("file_name", "data.nxs")
+    p = Path(filename)
+    suffixes = "".join(p.suffixes)
+    stem = p.name[:-len(suffixes)] if suffixes else p.name
 
     # Write the in‑memory HDF5 file
     fd_mem = io.BytesIO()
     with h5py.File(fd_mem, "w") as h5out:
-        hdf_copy(entry.parent, h5out, replacement)
-        record_bin_edges(h5out[entry.name], bins, bin_number=bin_number)
-    data = fd_mem.getvalue()
+        entry.copy(entry, h5out, entry.name)
+        for name, value in entry.parent.attrs.items():
+            h5out.attrs[name] = value
+        # print(f"{entry.name} copied to {h5out}")
+        record_bin_edges(h5out[entry.name], bins)
+
+        if split:
+            # Make a field for the bin number of the current frame
+            bin_number = h5out[f"{entry.name}/control"].create_dataset("bin_number", data=[0])
+            bin_number.attrs["long_name"] = "0-origin bin number stored in this entry"
+            num_bins = len(bins.edges) - 1
+
+            # Store each frame in a zip file as a separate hdf
+            # compresslevel=4 adds 10%
+            zip_io = io.BytesIO()
+            with zipfile.ZipFile(zip_io, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=compresslevel) as zipf:
+                for k in range(num_bins):
+                    # Plug in frame number and frame data
+                    bin_number[0] = k
+                    for target, value in replacement.items():
+                        #print(f"setting h5 {target} to {value[k]}")
+                        h5out[target][:] = value[k:k+1] if len(value.shape) == 1 else value[k]
+
+                    # Save the hdf file to zip
+                    h5out.flush()
+                    frame_data = fd_mem.getvalue()
+                    zip_name = f"{stem}_rebinned/{stem}_{k:05d}{suffixes}"
+                    zipf.writestr(zip_name, frame_data)
+
+            # Capture the entirety of the zip file
+            data = zip_io.getvalue()
+
+        else: # not split
+            # Plug vectors into the target locations
+            for target, value in replacement.items():
+                h5_replace_data(h5out[target], value)
+            h5out.flush()
+            data = fd_mem.getvalue()
+
+    # Done with the in-memory hdf file
     fd_mem.close()
 
-    return data
+    rebinned_name = f"{stem}_rebinned{suffixes}"
+    mimetype = "application/zip" if split else "application/x-hdf5"
+    outfile = rebinned_name + ".zip" if split else rebinned_name
 
+    return data, outfile, mimetype
 
-def nexus_zip(entry, binned, bins):
-    """Create a ZIP archive where each entry is a single‑bin NeXus file.
+def h5_replace_data(field: h5py.Dataset, data: NDArray):
+    # TODO: preserves attributes but not links
+    group = field.parent
+    name = field.name
+    attrs = {name: value for name, value in field.attrs.items()}
+    #print(f"{group} {name} {attrs} {field}")
+    del group[name]
+    field = group.create_dataset(name, data=data)
+    for name, value in attrs.items():
+        field.attrs[name] = value
 
-    For each bin index *k* we reuse :func:`nexus_dup` with ``bin_number=k`` so the
-    per‑frame file contains:
-        * a 2‑D detector slice for that bin
-        * a scalar ``count_time`` for the *k*‑th bin duration
-        * a scalar ``monitor_counts`` (if present)
-        * the ``bin_number`` dataset written by ``record_bins``
-    The filename inside the archive is derived from the original Nexus file name:
-    ``entry['/'].attrs['file_name']`` (if present).  The bin number is inserted
-    before the first extension using a five‑digit zero‑padded representation
-    (e.g. ``myfile_00003.nxs.ngv``).  If the attribute is missing we fall back to
-    the entry group's name.
-    """
-    # Resolve the base filename from the root group's attribute if it exists
-    file_name = entry["/"].attrs.get("file_name", "bin.nxs")
-
-    # Split into stem and suffixes (preserve multi‑part suffixes like .nxs.ngv)
-    p = Path(file_name)
-    suffixes = "".join(p.suffixes)
-    stem = p.name[:-len(suffixes)] if suffixes else p.name
-
-    num_bins = len(bins.edges) - 1
-    zip_io = io.BytesIO()
-    with zipfile.ZipFile(zip_io, mode="w", compression=zipfile.ZIP_DEFLATED) as zipf:
-        for k in range(num_bins):
-            bin_bytes = nexus_dup(entry, binned, bins, bin_number=k)
-            zip_name = f"{stem}_{k:05d}{suffixes}"
-            zipf.writestr(zip_name, bin_bytes)
-    return zip_io.getvalue()
-
-
-def record_bin_edges(entry, bins, bin_number=None):
+def record_bin_edges(entry: h5py.Group, bins: models.Bins):
     """Record bin edges and mode. Optionally store the bin index for per‑frame files.
 
     Parameters
@@ -120,9 +154,6 @@ def record_bin_edges(entry, bins, bin_number=None):
         The NeXus entry being written.
     bins: models.Bins
         The binning definition.
-    bin_number: int | None
-        If provided, a scalar dataset ``bin_number`` is written to the
-        ``control`` group so each per‑frame file knows its index.
     """
     # TODO: Consider storing the binning info in each detector
     # TODO: Add the appropriate NeXus metadata to the fields
@@ -133,10 +164,6 @@ def record_bin_edges(entry, bins, bin_number=None):
     field.attrs["long_name"] = f"bin edges for {bins.mode} binned data"
     field = control.create_dataset("bin_mode", data=bins.mode)
     field.attrs["long_name"] = "binning mode used to create the histogram"
-    if bin_number is not None:
-        # store as a scalar int dataset – easy to read downstream
-        field = control.create_dataset("bin_number", data=bin_number)
-        field.attrs["long_name"] = "0-origin bin number stored in this entry"
 
 def nexus_detector_replacement(entry):
     """
@@ -177,7 +204,7 @@ def nexus_detector_replacement(entry):
 # takes 0.3 sec to find all links, 0.3 sec to copy all items...
 # so should be able to do all replacements and return copy in < 1 sec
 
-def hdf_copy(source, target, replacement):
+def hdf_copy(source, target, replacement=None):
     # type: (h5py.Group, str) -> h5py.File
     """
     Copy an entry and all sub-entries from source to a destination.
