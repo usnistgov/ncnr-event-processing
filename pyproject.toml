@@ -1,5 +1,5 @@
 [project]
-name = "event_processing"
+name = "ncnr-event-processing"
 description = "Tools for processing and visualizing event streams from NCNR instruments"
 version = "0.0.1"
 authors = [
