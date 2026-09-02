@@ -503,7 +503,7 @@ def run_fetch(files):
             fetch_events_for_file(consumer, filename)
 
 def fetch_events_for_file(consumer, filename, datapath="", cleanup=True):
-    logger.debug("fetching events for", filename)
+    logger.debug(f"fetching events for {filename}")
     dbs = []
     try:
         nexus = data_cache.load_nexus(filename, datapath)
