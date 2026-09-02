@@ -10,7 +10,7 @@ Tools for processing and visualizing event streams from NCNR instruments
 
 Use pip installation in a local environment for end user tools
 ```sh
-pip install https://github.com/usnistgov/ncnr-event-processing.git
+pip install --extra-index-url=https://charlotte.ncnr.nist.gov/pypi ncnr-event-processing
 ```
 
 The web client needs to be compiled. This requires a working nodejs installation, which can be installed with the nodeenv package:
@@ -28,6 +28,11 @@ python -m event_processing.rebinning_client.build_client
 To run the web server and start the client use
 ```sh
 event-processing serve --preview
+```
+
+## Zero-install method
+```sh
+uv run --with ncnr-event-processing --index https://charlotte.ncnr.nist.gov/pypi event-processing
 ```
 
 ### Command-line rebinning
@@ -107,6 +112,8 @@ event-processing clear
 ```
 Generally this happens automatically when you bump server.CACHE_VERSION,
 but you may want to trigger it manually if you are playing with code timing.
+
+
 
 ## Authors and acknowledgment
 Paul Kienzle, Brian Maranville
