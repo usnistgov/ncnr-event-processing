@@ -29,6 +29,7 @@ dependencies = [
 
 [project.scripts]
 event-processing = "event_processing.rebinning_api.server:main"
+ncnr-event-processing = "event_processing.rebinning_api.server:main"
 
 [project.optional-dependencies]
 dev = [
