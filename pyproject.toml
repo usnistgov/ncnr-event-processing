@@ -18,6 +18,7 @@ dependencies = [
     "plotly",
     "nicegui",
     "kafka-python",
+    "confluent-kafka",
     "avroc",
     "pylru",
     "scipy",
