@@ -24,7 +24,8 @@ dependencies = [
     "scipy",
     "numba",
     "psutil",
-    "diskcache"
+    "diskcache",
+    "uncertainties"
 ]
 
 [project.scripts]
