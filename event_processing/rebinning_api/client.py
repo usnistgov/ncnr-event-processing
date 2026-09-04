@@ -5,6 +5,7 @@ import requests
 import numpy as np
 
 from . import models
+from . import binning
 
 HOST = "http://localhost:8000"
 
@@ -79,99 +80,13 @@ def get_timebin_nexus(metadata, bins):
     return models.NexusReply(**reply)
 
 
-def time_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0):
-    # TODO: not sure if it is a good idea to make time bins contingent on mask
-    # Reasons against: if you are applying the same bins across a number of
-    # measurements but one of them has a bad region of data, you don't want the
-    # bin edges to suddenly jump for one of the datasets. Much better to just
-    # return NaN for that datapoint so your data is square. Leave the masking
-    # default off for now. Anyway, the UI will have the limits and can choose
-    # to prompt the user in odd situations.
-    if False and mask is not None:
-        mask_start = mask.edges[0, 0]
-        mask_end = mask.edges[-1, 1]
-        # Default start/end to mask limits if we have masking.
-        if start is None:
-            start = mask_start
-        if end is None:
-            end = mask_end
-    if interval is None and nbins is None:
-        nbins = 10
-    edges = _lin_edges(metadata.duration, start, end, interval, nbins)
-    bins = models.TimeBins(edges=edges, mask=mask)
-    return bins
-
-def strobe_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
-        hysteresis=False, trigger_override=None, offset=0.):
-    edges = _lin_edges(metadata.trigger_interval, start, end, interval=interval, nbins=nbins)
-    bins = models.StrobeBins(edges=edges-offset, mask=mask, hysteresis=hysteresis, triggers=trigger_override)
-    return bins
-
-def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
-        hysteresis=False):
-    if metadata.sweep is None:
-        raise TypeError("Cannot do sweep binning when not sweeping a motor")
-    device = metadata.sweep.device
-    if start is None:
-        start = metadata.sweep.start
-    if stop is None:
-        stop = metadata.sweep.stop
-    edges = np.linspace(start, stop, nbins+1)
-    bins = models.DeviceBins(edges=edges, mask=mask, hysteresis=hysteresis, device=device)
-    return bins
-
-def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
-        hysteresis=False):
-    if device not in metadata.logs:
-        raise TypeError(f"Cannot bin against {device} when values are not tracked")
-    if start is None:
-        start = metadata.logs[device].min
-    if end is None:
-        end = metadata.logs[device].max
-
-    if nbins is not None:
-        edges = np.arange(start, end, nbins+1)
-    elif interval is not None:
-        nbins = (end - start) // interval
-        edges = np.arange(start, end+interval, interval)
-        if edges[-2] == duration: # last bin is full so don't need a partial bin more
-            edges = edges[:-1]
-    else:
-        raise TypeError("Must specify one of interval or nbins for edges")
-    bins = models.SweepBins(edges=edges, mask=mask, hysteresis=hysteresis, device=device)
-    return bins
-
-def _lin_edges(duration, start, end, interval=None, nbins=None) -> models.vector:
-    print(f"_lin_edges {duration=} {start=} {end=} {interval=} {nbins=}")
-    if start is None:
-        start = 0
-    elif start < 0:
-        start = duration + start
-    if end is None:
-        end = duration
-    elif end < 0:
-        end = duration + end
-
-    if start == end:
-        raise ValueError(f"No bin range for lin bins {start=} {end=} {duration=}")
-
-    if nbins is not None:
-        edges = np.linspace(start, end, nbins+1)
-    elif interval is not None:
-        edges = np.arange(start, end+interval, interval)
-        if edges[-2] == duration: # last bin is full so don't need a partial bin more
-            edges = edges[:-1]
-    else:
-        raise TypeError("Must specify one of interval or nbins for edges")
-
-    return edges
 
 def demo():
     filename = "sans68869.nxs.ngv"
     path = "vsans/202009/27861/data"
     metadata = get_metadata(filename, path=path)
     #print("metadata", metadata)
-    bins = time_linbins(metadata, interval=10.0)
+    bins = binning.time_linbins(metadata, interval=10.0)
     #summary = get_summary(metadata, bins)
     #print("summary", summary)
     #frames = get_frames(metadata, bins, 0, 2)
@@ -187,7 +102,7 @@ def test_frame():
     path = "vsans/202009/27861/data"
     metadata = get_metadata(filename, path=path)
     #print("metadata", metadata)
-    bins = time_linbins(metadata, interval=3.6)
+    bins = binning.time_linbins(metadata, interval=3.6)
     summary = get_summary(metadata, bins)
     frames = get_frames(metadata, bins, 100, 101)
     return frames

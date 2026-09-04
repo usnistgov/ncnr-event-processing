@@ -639,7 +639,7 @@ async def index(client: Client):
                     ui.notify("no file loaded")
                     return
                 bins = time_bin_settings.get_summary_time_bins_object()
-                # bins = binning_client.time_linbins(metadata, interval=interval)
+                # bins = binning.time_linbins(metadata, interval=interval)
                 binning_state['bins'] = bins
                 binning_state['fetching_summary'] = True
                 # print('starting fetch')

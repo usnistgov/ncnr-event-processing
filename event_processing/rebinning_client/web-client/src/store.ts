@@ -105,16 +105,10 @@ interface MetadataReply {
   timestamp: string
   //: Total measurement time
   duration: number
-  //: For strobed measurements, the expected interval between triggers.
-  trigger_interval: number
   //: Active detectors
   detectors: string[]
   //: Environment logs, with values for min, max, mean and std across the measurement
   logs: { [key: string]: DeviceLog }
-  //: Measurement mode: time, strobe, cycle, sweep, device
-  event_mode: string
-  //: Sweep device, start, stop, cycles
-  sweep: Sweep | null
 }
 
 interface DeviceLog {

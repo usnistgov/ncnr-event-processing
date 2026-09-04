@@ -122,7 +122,7 @@ class Sweep(BaseModel):
     #: starting value
     start: float
     #: stopping value
-    stop: float
+    end: float
     #: number of cycles (or zero if indeterminate)
     cycles: int
 
@@ -175,16 +175,10 @@ class MetadataReply(BaseModel):
     timestamp: datetime
     #: Total measurement time
     duration: float
-    #: For strobed measurements, the expected interval between triggers.
-    trigger_interval: float
     #: Active detectors
     detectors: list[str]
     #: Environment logs, with values for min, max, mean and std across the measurement
     logs: dict[str, DeviceLog]
-    #: Measurement mode: time, strobe, cycle, sweep, device
-    event_mode: str
-    #: Sweep device, start, stop, cycles
-    sweep: Sweep|None
 
 class TriggerReply(BaseModel):
     """

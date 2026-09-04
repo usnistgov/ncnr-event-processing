@@ -175,12 +175,7 @@ def get_metadata(request: models.Measurement):
     replacement = nexus_util.nexus_detector_replacement(entry)
     #print("detector data links", replacement)
     detectors = list(replacement.keys())
-    # TODO: determine mode for sweep device and triggers
-    event_mode = 'time' # not written yet... this is the default
-    trigger_interval = 0.0
-    # TODO: lookup sweep controls from nexus file
     logs = {}
-    sweep = None
 
     # TODO: If no event data then return an API exception
 
@@ -192,20 +187,17 @@ def get_metadata(request: models.Measurement):
         # timestamp=isoparser().isoparse(timestamp),
         timestamp=timestamp,
         duration=duration,
-        trigger_interval=trigger_interval,
         detectors=detectors,
         logs=logs,
-        event_mode=event_mode,
-        sweep=sweep,
     )
     return reply
 
 # ===================================
 @app.post("/summary_time")
 def get_summary_time(request: models.SummaryTimeRequest):
-    return get_summary(request.measurement, request.bins)
+    return _get_summary(request.measurement, request.bins)
 
-def get_summary(measurement, bins):
+def _get_summary(measurement, bins):
     result = bin_events(measurement, bins, summary=True)
     devices = {}
     monitor = None
@@ -507,14 +499,12 @@ def request_key(request):
 # TODO: how do we clear the cache when upgrading the application?
 
 def check(filename=None, verbose=False):
-    from . import client
-
     if filename is None:
         filename = "sans68869.nxs.ngv"
     measurement = models.Measurement(filename=filename)
     metadata = get_metadata(measurement)
     if verbose: print("metadata", metadata)
-    bins = client.time_linbins(metadata, interval=5)
+    bins = binning.time_linbins(metadata, interval=5)
     #print("num bins", bins.edges.size)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
     summary = get_summary_time(request)
@@ -538,7 +528,6 @@ def check2():
         event_capture.fetch_events_for_file(consumer, nexusfile, datapath=path)
 
 def check3():
-    from . import client
     # event_capture.setup()
     # path = "vsans/202102/27861/data"
     # nexusfile = "sans72110.nxs.ngv"
@@ -546,7 +535,7 @@ def check3():
     nexusfile = "sans72222.nxs.ngv"
     measurement = models.Measurement(filename=nexusfile, path=path, point=0)
     metadata = get_metadata(measurement)
-    bins = client.time_linbins(metadata, interval=501)
+    bins = binning.time_linbins(metadata, interval=501)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins)
     reply = get_timebin_nexus(request)
     with open('/tmp/end-to-end.hdf', 'wb') as fd:
@@ -582,9 +571,11 @@ def configure_data_source(cache: str = None, refresh: bool = False, auto_hst_fil
     event_cache.configure(CACHE_ROOT)
 
 def parse_time(value: str | float) -> float:
-    """Parse a time specification with optional SI unit.
+    """Parse a time specification with optional SI prefix.
     Supports seconds (s), milliseconds (ms), microseconds (us or μs), nanoseconds (ns).
-    If unit is omitted, defaults to milliseconds. Returns seconds as float.
+    If unit is omitted, defaults to seconds.
+
+    Returns seconds as float.
     """
     if isinstance(value, (int, float)):
         # Assume already in seconds (e.g., default numeric defaults)
@@ -596,9 +587,9 @@ def parse_time(value: str | float) -> float:
     num = float(m.group(1))
     unit = m.group(2).lower()
     # Default unit is milliseconds if none provided
-    if unit == "" or unit == "ms":
+    if unit == "ms":
         factor = 1e-3
-    elif unit == "s":
+    elif unit == "" or unit == "s":
         factor = 1.0
     elif unit in ("us", "µs", "μs"):
         factor = 1e-6
@@ -618,7 +609,6 @@ def cli_rebin(args: argparse.Namespace):
         webbrowser.open(url)
         return
 
-    from . import client
     print(f"Loading measurement for {args.filename}...")
     measurement = models.Measurement(filename=args.filename, path=args.path, point=0)
 
@@ -635,9 +625,9 @@ def cli_rebin(args: argparse.Namespace):
         if args.t0_length > 0:
             metadata.trigger_interval = args.t0_length  # seconds
         interval = args.interval if args.interval else None
-        bins = client.strobe_linbins(metadata, interval=interval, nbins=args.nbins, offset=offset)
+        bins = binning.strobe_linbins(metadata, interval=interval, nbins=args.nbins, offset=offset)
     else:
-        bins = client.time_linbins(metadata, interval=args.interval, nbins=args.nbins)
+        bins = binning.time_linbins(metadata, interval=args.interval, nbins=args.nbins)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins, split=args.split)
 
     print("Processing events and generating Nexus output (this may take a moment)...")
@@ -741,10 +731,10 @@ def main():
     parser_rebin_bins = parser_rebin.add_mutually_exclusive_group()
     parser_rebin_bins.add_argument('--interval', type=parse_time, default=None, help='Bin interval (seconds). Supports optional units s, ms, us/μs, ns. Default unit is ms.')
     parser_rebin_bins.add_argument('--nbins', type=int, default=None, help='Number of bins (default: 10, used when neither --interval nor --nbins is given).')
-    parser_rebin.add_argument('--start', type=parse_time, default=0.0, help='Start time relative to start (+) or end (-) of measurement: s, ms (default), us/μs, or ns.')
-    parser_rebin.add_argument('--stop', type=parse_time, default=0.0, help='Stop time relative to start (+) or end (-) of measurement: s, ms (default), us/μs, or ns.')
-    parser_rebin.add_argument('--t0-offset', type=parse_time, default=0.0, help='Start time relative to trigger: s, ms (default), us/μs, or ns.')
-    parser_rebin.add_argument('--t0-length', type=parse_time, default=0.0, help='Binning duration after T0: s, ms (default), us/μs, or ns.')
+    parser_rebin.add_argument('--start', type=parse_time, default=0.0, help='Start time relative to start (+) or end (-) of measurement: s, ms, us/μs, or ns.')
+    parser_rebin.add_argument('--end', type=parse_time, default=0.0, help='Stop time relative to start (+) or end (-) of measurement: s, ms, us/μs, or ns.')
+    parser_rebin.add_argument('--t0-offset', type=parse_time, default=0.0, help='Start time relative to trigger: s, ms, us/μs, or ns.')
+    parser_rebin.add_argument('--t0-length', type=parse_time, default=0.0, help='Binning duration after T0: s, ms, us/μs, or ns.')
     parser_rebin.add_argument('--events-file', type=str, default=None, help='Reload cleaned events from a previously saved events+nexus file (see "save-events") instead of fetching them live.')
     parser_rebin.add_argument('--split', action='store_true', help='Write a per‑bin ZIP archive (uses nexus_zip) instead of a single rebinned file.')
 
@@ -754,6 +744,12 @@ def main():
     parser_save_events.add_argument('--point', type=int, default=0, help='Point index within the measurement (default: 0)')
     parser_save_events.add_argument('--entry', type=int, default=0, help='Entry index within the nexus file (default: 0)')
     parser_save_events.add_argument('--output', type=str, default=None, help='Copy the resulting events+nexus file to this path.')
+
+    # --- Command: build-client ---
+    parser_client = subparsers.add_parser('build-client', help="Build the web client.")
+    parser_client.add_argument("--no-deps", action="store_true", help="Don't install npm dependencies.")
+    parser_client.add_argument("--sourcemap", action="store_true", help="Generate sourcemaps.")
+    parser_client.add_argument("--cleanup", action="store_true", help="Remove the node_modules directory.")
 
     args = parser.parse_args()
 
@@ -822,6 +818,13 @@ def main():
             point=args.point,
             entry=args.entry,
             output=args.output,
+        )
+    elif args.command == "build-client":
+        from event_processing.rebinning_client.build_client import build_client
+        build_client(
+            no_deps=args.no_deps,
+            sourcemap=args.sourcemap,
+            cleanup=args.cleanup,
         )
     else:
         parser.print_help()

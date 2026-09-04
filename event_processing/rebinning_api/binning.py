@@ -10,8 +10,93 @@ from . import models
 # Use the logger from uvicorn so we get pretty formatting
 logger = logging.getLogger("uvicorn.error")
 
-LAST_BIN_SLUFF = 0.5
-"""Allow the last bin in a T0 measurement to be a few percent short."""
+def time_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0):
+    # TODO: not sure if it is a good idea to make time bins contingent on mask
+    # Reasons against: if you are applying the same bins across a number of
+    # measurements but one of them has a bad region of data, you don't want the
+    # bin edges to suddenly jump for one of the datasets. Much better to just
+    # return NaN for that datapoint so your data is square. Leave the masking
+    # default off for now. Anyway, the UI will have the limits and can choose
+    # to prompt the user in odd situations.
+    if False and mask is not None:
+        mask_start = mask.edges[0, 0]
+        mask_end = mask.edges[-1, 1]
+        # Default start/end to mask limits if we have masking.
+        if start is None:
+            start = mask_start
+        if end is None:
+            end = mask_end
+    if interval is None and nbins is None:
+        nbins = 10
+    edges = _lin_edges(metadata.duration, start, end, interval, nbins)
+    bins = models.TimeBins(edges=edges, mask=mask)
+    return bins
+
+def strobe_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
+        hysteresis=False, trigger_override=None, offset=0.):
+    edges = _lin_edges(metadata.trigger_interval, start, end, interval=interval, nbins=nbins)
+    bins = models.StrobeBins(edges=edges-offset, mask=mask, hysteresis=hysteresis, triggers=trigger_override)
+    return bins
+
+def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
+        hysteresis=False):
+    if metadata.sweep is None:
+        raise TypeError("Cannot do sweep binning when not sweeping a motor")
+    device = metadata.sweep.device
+    if start is None:
+        start = metadata.sweep.start
+    if end is None:
+        end = metadata.sweep.end
+    edges = np.linspace(start, end, nbins+1)
+    bins = models.DeviceBins(edges=edges, mask=mask, hysteresis=hysteresis, device=device)
+    return bins
+
+def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
+        hysteresis=False):
+    if device not in metadata.logs:
+        raise TypeError(f"Cannot bin against {device} when values are not tracked")
+    if start is None:
+        start = metadata.logs[device].min
+    if end is None:
+        end = metadata.logs[device].max
+
+    if nbins is not None:
+        edges = np.arange(start, end, nbins+1)
+    elif interval is not None:
+        nbins = (end - start) // interval
+        edges = np.arange(start, end+interval, interval)
+        if edges[-2] == duration: # last bin is full so don't need a partial bin more
+            edges = edges[:-1]
+    else:
+        raise TypeError("Must specify one of interval or nbins for edges")
+    bins = models.SweepBins(edges=edges, mask=mask, hysteresis=hysteresis, device=device)
+    return bins
+
+def _lin_edges(duration, start, end, interval=None, nbins=None) -> models.vector:
+    print(f"_lin_edges {duration=} {start=} {end=} {interval=} {nbins=}")
+    if start is None:
+        start = 0
+    elif start < 0:
+        start = duration + start
+    if end is None:
+        end = duration
+    elif end < 0:
+        end = duration + end
+
+    if start == end:
+        raise ValueError(f"No bin range for lin bins {start=} {end=} {duration=}")
+
+    if nbins is not None:
+        edges = np.linspace(start, end, nbins+1)
+    elif interval is not None:
+        edges = np.arange(start, end+interval, interval)
+        if edges[-2] == duration: # last bin is full so don't need a partial bin more
+            edges = edges[:-1]
+    else:
+        raise TypeError("Must specify one of interval or nbins for edges")
+
+    return edges
+
 
 def bin(entry, point, bins:models.Bins, events):
     """
@@ -258,9 +343,7 @@ def _bin_strobed(events, edges):
     if len(triggers) > 1:
         delta = np.diff(triggers)
         # Allow the last bin to be 5% too short
-        last_bin_width = edges[-1] - edges[-2]
-        too_short = np.sum(delta < edges[-2] - LAST_BIN_SLUFF*last_bin_width)
-        if too_short > 0:
+        if (delta < edges[-2]).any():
             interval = U(delta.mean(), delta.std(ddof=1))/1e6
             # TODO: consider correcting number of triggers based on T0 interval and bin offset
             logger.warning(f"Triggers too close together: T0 interval={interval:uS} ms, histogram window={edges[-1]/1e6:.1f} ms")
