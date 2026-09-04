@@ -34,9 +34,7 @@ ncnr-event-processing = "event_processing.rebinning_api.server:main"
 [project.optional-dependencies]
 dev = [
 ]
-confluent = [
-    "confluent-kafka"
-]
+
 torch = [
     "torch"
 ]
