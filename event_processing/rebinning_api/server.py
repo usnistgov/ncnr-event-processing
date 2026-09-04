@@ -68,7 +68,9 @@ app = FastAPI()
 # Mount the static files directory
 current_path = Path(__file__).parent
 static_path = current_path.parent / "rebinning_client" / "web-client" / "dist"
-app.mount("/static", StaticFiles(directory=static_path, html=True), name="frontend")
+
+if static_path.exists():
+    app.mount("/static", StaticFiles(directory=static_path, html=True), name="frontend")
 
 
 origins = [
