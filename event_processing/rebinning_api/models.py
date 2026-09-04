@@ -203,7 +203,7 @@ class TriggerReply(BaseModel):
 
 class SummaryTimeRequest(BaseModel):
     measurement: Measurement
-    bins: TimeBins
+    bins: TimeBins|StrobeBins
     split: bool = False  # When true, return a ZIP of per‑bin Nexus files
 
 class SummaryReply(BaseModel):

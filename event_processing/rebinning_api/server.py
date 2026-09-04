@@ -414,10 +414,10 @@ def ensure_cleaned_events(measurement: models.Measurement, entry, hst_files: lis
     return events
 
 
-def bin_events(measurement: models.Measurement, bins: models.TimeBins, summary=False):
+def bin_events(measurement: models.Measurement, bins: models.TimeBins|models.StrobeBins, summary=False):
     from timeit import default_timer as tic; T0 = tic()
-    if bins.mode != "time":
-        raise NotImplementedError("only time-mode binning implemented for now")
+    #if bins.mode != "time":
+    #    raise NotImplementedError("only time-mode binning implemented for now")
 
     key = (request_key(measurement), request_key(bins))
     #print("Key:", key)
@@ -577,7 +577,16 @@ def configure_data_source(cache: str = None, refresh: bool = False, auto_hst_fil
     data_cache.configure(CACHE_ROOT)
     event_cache.configure(CACHE_ROOT)
 
-def cli_rebin(filename: str, path: str, preview: bool = False, interval: int = None, nbins: int = None, events_file: str = None, split: bool = False):
+def cli_rebin(
+    filename: str,
+    path: str,
+    preview: bool = False,
+    interval: int = None,
+    nbins: int = None,
+    split: bool = False,
+    t0_offset: float = 0.0,
+    t0_length: float = 0.0,
+):
     """Handles the CLI execution for rebinning or launching the preview."""
     if preview:
         import webbrowser
@@ -598,7 +607,16 @@ def cli_rebin(filename: str, path: str, preview: bool = False, interval: int = N
         print(f"Generating bins with interval {interval}...")
     else:
         print(f"Generating {nbins or 10} bins...")
-    bins = client.time_linbins(metadata, interval=interval, nbins=nbins)
+    if t0_length > 0 or metadata.trigger_interval != 0.0:
+        start = t0_offset / 1000.0 # ms -> s
+        if t0_length > 0:
+            duration = t0_length/1000.0 # ms -> s
+            metadata.trigger_interval = duration
+        else:
+            duration = metadata.trigger_interval
+        bins = client.strobe_linbins(metadata, interval=interval, nbins=nbins, start=start, end=start+duration)
+    else:
+        bins = client.time_linbins(metadata, interval=interval, nbins=nbins)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins, split=split)
 
     print("Processing events and generating Nexus output (this may take a moment)...")
@@ -703,6 +721,8 @@ def main():
     parser_rebin_bins = parser_rebin.add_mutually_exclusive_group()
     parser_rebin_bins.add_argument('--interval', type=int, default=None, help='Bin interval.')
     parser_rebin_bins.add_argument('--nbins', type=int, default=None, help='Number of bins (default: 10, used when neither --interval nor --nbins is given).')
+    parser_rebin.add_argument('--t0-offset', type=float, default=0.0, help='Start time relative to trigger (milliseconds).')
+    parser_rebin.add_argument('--t0-length', type=float, default=0.0, help='Binning duration after T0 (milliseconds).')
     parser_rebin.add_argument('--events-file', type=str, default=None, help='Reload cleaned events from a previously saved events+nexus file (see "save-events") instead of fetching them live.')
     parser_rebin.add_argument('--split', action='store_true', help='Write a per‑bin ZIP archive (uses nexus_zip) instead of a single rebinned file.')
 
@@ -773,6 +793,8 @@ def main():
             interval=args.interval,
             nbins=args.nbins,
             split=args.split,
+            t0_offset=args.t0_offset,
+            t0_length=args.t0_length,
         )
     elif args.command == "save-events":
         configure_data_source(

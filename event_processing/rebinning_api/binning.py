@@ -243,15 +243,20 @@ def _bin_strobed(events, edges):
     offset = edges[0]
     edges -= offset # edges is new, so we can update in place with -=
 
-    triggers = events.get('triggers', None)
-    if not triggers:
-        raise ValueError("Missing trigger information in datastream")
+    triggers = events.get('T0', None)
+    if triggers is None:
+        raise ValueError("Missing T0 trigger information in datastream")
 
     # TODO: can we update data from the cache inplace?
     triggers = triggers + offset # Don't use += because triggers might be reused
 
     if len(triggers) > 1:
         delta = np.diff(triggers)
+        too_short = np.sum(delta < edges[-1])
+        if too_short > 0:
+            # TODO: consider correcting number of triggers based on T0 interval and bin offset
+            counting_error = f"Count times overestimated by as much as {100*too_short/len(triggers):.1}% for later bins"
+            logger.warning(f"Triggers too close together. {counting_error}")
         trigger_stats = dict(
             n=len(triggers),
             min=delta.min()/1e9, 
@@ -261,21 +266,24 @@ def _bin_strobed(events, edges):
         )
         result['trigger'] = trigger_stats
 
-    result['count_time'] = len(triggers)*np.diff(edges)*1e-9
-
     detectors = events.get('detectors', {})
-    binned = {}
+    binned_detectors = {}
     for name, detector in detectors.items():
         dims, ts, x, y = detector['dims'], detector['ts'], detector['x'], detector['y']
         #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
-        ##print(edges[:5], edges[-5:])
-        #print(edges)
         nx, ny = dims
-        index = np.searchsorted(edges, ts-triggers)
+        # Use triggers[1:] because searchsorted returns the prior interval.
+        trigger_index = np.searchsorted(triggers[1:], ts) 
+        ts_relative = ts - triggers[trigger_index]
+        #print(f"{trigger_index=} {triggers[:10]=} {ts[:10]=} {ts_relative[:10]=}")
+        bin_index = np.searchsorted(edges, ts_relative)
         data = np.zeros((nx, ny, nbins+2), 'int32')
-        np.add.at(data, (x, y, index), 1)
-        binned[name] = data[:, :, 1:-1]
-        print(f"{name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned[name].sum():<8d}")
+        np.add.at(data, (x, y, bin_index), 1)
+        binned_detectors[name] = data[:, :, 1:-1]
+        #print(f"strobed {name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
+
+    result['detectors'] = binned_detectors
+    result['count_time'] = len(triggers)*np.diff(edges)*1e-9
 
     devices = events.get("devices", {})
     if not devices:

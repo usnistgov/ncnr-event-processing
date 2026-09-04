@@ -370,11 +370,12 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
             detectors[detector_name] = dict(dims=dims, ts=np.zeros(0, dtype='int64'), ts_sigma=np.zeros(0, dtype='int64'), x=np.zeros(0, dtype='int64'), y=np.zeros(0, dtype='int64'))
 
+    # TODO: generic across instruments?
     # Treat the monitor as a detector named "monitor" so that we don't need
     # special handling during rebinning.
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
-        detectors['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), x=0, y=0)
+        detectors['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64')-start, x=0, y=0)
 
     raw_events._cleaned_fields = events
     # print(f"cleaned_events: {events}")

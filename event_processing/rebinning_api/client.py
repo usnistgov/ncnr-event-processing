@@ -105,10 +105,10 @@ def time_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask
     bins = models.TimeBins(edges=edges, mask=mask)
     return bins
 
-def strobe_linbins(metadata, start=None, end=None, interval=0.1, mask=None, point=0,
+def strobe_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
         hysteresis=False, trigger_override=None):
-    edges = _lin_edges(metadata.trigger_interval, start, end, interval)
-    bins = models.StrobeBins(edges=edges, mask=mask, hysteresis=hysteresis, trigger_override=trigger_override)
+    edges = _lin_edges(metadata.trigger_interval, start, end, interval=interval, nbins=nbins)
+    bins = models.StrobeBins(edges=edges, mask=mask, hysteresis=hysteresis, triggers=trigger_override)
     return bins
 
 def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
@@ -154,6 +154,9 @@ def _lin_edges(duration, start, end, interval=None, nbins=None) -> models.vector
         end = duration
     elif end < 0:
         end = duration + end
+
+    if start == end:
+        raise ValueError(f"No bin range for lin bins {start=} {end=} {duration=}")
 
     if nbins is not None:
         edges = np.linspace(start, end, nbins+1)

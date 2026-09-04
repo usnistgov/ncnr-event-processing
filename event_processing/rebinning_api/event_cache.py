@@ -55,6 +55,7 @@ def load_cached_events(measurement, entry_name: str, path: Path | None = None) -
         return None
     with h5py.File(target, 'r') as f:
         node = group_path(entry_name, measurement.point)
+        # print(f"loading cleaned events from {target} {node}")
         if node not in f:
             return None
         return serialize_cleaned.read_cleaned_events(f[node])
@@ -67,10 +68,10 @@ def save_cleaned_events(measurement, entry_name: str, cleaned_fields: dict, meta
     """
     target = Path(path) if path is not None else ensure_events_file(measurement)
     node = group_path(entry_name, measurement.point)
-    with _write_lock:
-        with h5py.File(target, 'a') as f:
-            if node in f:
-                del f[node]
-            group = f.require_group(node)
-            serialize_cleaned.write_cleaned_events(group, cleaned_fields, meta=meta)
+    with _write_lock, h5py.File(target, 'a') as f:
+        # print(f"save cleaned events to {target}")
+        if node in f:
+            del f[node]
+        group = f.require_group(node)
+        serialize_cleaned.write_cleaned_events(group, cleaned_fields, meta=meta)
     return target

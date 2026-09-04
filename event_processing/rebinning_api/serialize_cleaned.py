@@ -1,5 +1,8 @@
 import typing
 
+import numpy as np
+import h5py
+
 if typing.TYPE_CHECKING:
     import h5py
     from event_processing.rebinning_api.event_capture import EventsManager
@@ -13,7 +16,6 @@ def write_cleaned_events(group: "h5py.Group", cleaned_fields: dict, meta: dict |
     *meta* is an optional dict of scalar/array attrs (e.g. start/stop/arm/disarm)
     recorded alongside the events for provenance; it is not required for binning.
     """
-    import numpy as np
     import hdf5plugin
 
     if meta:
@@ -47,11 +49,11 @@ def write_cleaned_events(group: "h5py.Group", cleaned_fields: dict, meta: dict |
                         # keys are: 'mean', 'std', 'min', 'max'
                         stats_group.create_dataset(stat_key, data=stat_val, shape=())
 
-        elif key in ('monitor', 'TO_SYNC'):
+        elif key in ('monitor', 'TO_SYNC', 'T0'):
             sub_group = group.create_group(key)
-            if data:
+            if data is not None:
                 # Unpack list of (timestamp,) tuples
-                ts = [d[0] for d in data]
+                ts = data if np.isscalar(data[0]) else [d[0] for d in data]
                 sub_group.create_dataset('timestamp', data=np.array(ts, dtype='int64'), scaleoffset=0, compression='gzip')
                 sub_group.create_dataset('timestamp_sigma', shape=(0,), dtype='int64')
             else:
@@ -89,9 +91,9 @@ def read_cleaned_events(group: "h5py.Group") -> dict:
                     }
                 cleaned_fields['detectors'][det_key] = det_data
 
-        elif key in ('monitor', 'TO_SYNC'):
+        elif key in ('monitor', 'TO_SYNC', 'T0'):
             timestamps = sub_group['timestamp'][:]
-            cleaned_fields[key] = [(t,) for t in timestamps]
+            cleaned_fields[key] = timestamps
 
     return cleaned_fields
 
@@ -100,9 +102,8 @@ def events_to_hdf5(db: "EventsManager", output_hdf5_path: str):
     """
     Converts an EventsManager database to a standalone HDF5 file with the same structure.
     """
-    import h5py
-
     meta = dict(start=db.start, stop=db.stop, arm=db.arm, disarm=db.disarm)
+    # print(f"writing hdf {output_hdf5_path}")
     with h5py.File(output_hdf5_path, 'w') as f:
         write_cleaned_events(f, db._cleaned_fields, meta=meta)
 
@@ -111,8 +112,6 @@ def events_from_hdf5(db: "EventsManager", path):
     """
     Populate the internal _cleaned_fields dictionary from a standalone HDF5 event file.
     """
-    import h5py
-
     with h5py.File(path, 'r') as f:
         db.start = f.attrs.get('start', 0)
         db.stop = f.attrs.get('stop', 0)

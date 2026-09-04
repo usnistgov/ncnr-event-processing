@@ -319,10 +319,19 @@ def event_cleanup(entry, raw_events, datapath=""):
     """
     instrument = util.lookup_instrument(entry)
     cleanup_fn = cleanup.CLEANUP_FNS.get(instrument, None)
-    if cleanup_fn is not None:
-        return cleanup_fn(entry, raw_events, datapath=datapath)
+    if cleanup_fn is None:
+        raise NotImplementedError(f"Do not yet support events for {instrument}")
 
-    raise NotImplementedError(f"Do not yet support events for {instrument}")
+    cleaned_events = cleanup_fn(entry, raw_events, datapath=datapath)
+
+    triggers = raw_events._fields.get("T0", None)
+    if triggers:
+        cleaned_events['T0'] = triggers - raw_events.start[0]
+
+    # TODO: adjust device timestamps
+
+    return cleaned_events
+
 
 def get_schema_id_confluent_prefix(message: ConsumerRecord):
     """ this function assumes version is encoded in Confluent payload prefix, if it exists"""
@@ -639,7 +648,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
         #no gate_off found, use disarm_time
         logger.warning(f"no GATE_OFF found, using disarm_time={disarm_time}")
         stop_times = [disarm_time] # fall back to disarm time if no stop_time in stream
-    
+
     db.set_times(start_times, stop_times, arm_time, disarm_time)
 
     for start_time, stop_time in zip(start_times, stop_times):
