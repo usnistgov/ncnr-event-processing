@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import base64
 from collections import deque
@@ -577,47 +578,64 @@ def configure_data_source(cache: str = None, refresh: bool = False, auto_hst_fil
     data_cache.configure(CACHE_ROOT)
     event_cache.configure(CACHE_ROOT)
 
-def cli_rebin(
-    filename: str,
-    path: str,
-    preview: bool = False,
-    interval: int = None,
-    nbins: int = None,
-    split: bool = False,
-    t0_offset: float = 0.0,
-    t0_length: float = 0.0,
-):
+def parse_time(value: str | float) -> float:
+    """Parse a time specification with optional SI unit.
+    Supports seconds (s), milliseconds (ms), microseconds (us or μs), nanoseconds (ns).
+    If unit is omitted, defaults to milliseconds. Returns seconds as float.
+    """
+    if isinstance(value, (int, float)):
+        # Assume already in seconds (e.g., default numeric defaults)
+        return float(value)
+    import re
+    m = re.fullmatch(r"\s*([0-9]*\.?[0-9]+)\s*([a-zμ]*)\s*", value)
+    if not m:
+        raise argparse.ArgumentTypeError(f"Invalid time value: '{value}'")
+    num = float(m.group(1))
+    unit = m.group(2).lower()
+    # Default unit is milliseconds if none provided
+    if unit == "" or unit == "ms":
+        factor = 1e-3
+    elif unit == "s":
+        factor = 1.0
+    elif unit in ("us", "µs", "μs"):
+        factor = 1e-6
+    elif unit == "ns":
+        factor = 1e-9
+    else:
+        raise argparse.ArgumentTypeError(f"Unrecognized time unit: '{unit}'")
+    return num * factor
+
+def cli_rebin(args: argparse.Namespace):
     """Handles the CLI execution for rebinning or launching the preview."""
-    if preview:
+    if args.preview:
         import webbrowser
         # Launch the Vue application. Ensure your frontend server port matches!
-        url = f"http://localhost:8080/?filename={filename}&path={path}"
+        url = f"http://localhost:8080/?filename={args.filename}&path={args.path}"
         print(f"Opening preview in browser: {url}")
         webbrowser.open(url)
         return
 
     from . import client
-    print(f"Loading measurement for {filename}...")
-    measurement = models.Measurement(filename=filename, path=path, point=0)
+    print(f"Loading measurement for {args.filename}...")
+    measurement = models.Measurement(filename=args.filename, path=args.path, point=0)
 
     print("Fetching metadata...")
     metadata = get_metadata(measurement)
 
-    if interval is not None:
-        print(f"Generating bins with interval {interval}...")
+    if args.interval is not None:
+        print(f"Generating bins with interval {args.interval} seconds...")
     else:
-        print(f"Generating {nbins or 10} bins...")
-    if t0_length > 0 or metadata.trigger_interval != 0.0:
-        start = t0_offset / 1000.0 # ms -> s
-        if t0_length > 0:
-            duration = t0_length/1000.0 # ms -> s
-            metadata.trigger_interval = duration
-        else:
-            duration = metadata.trigger_interval
-        bins = client.strobe_linbins(metadata, interval=interval, nbins=nbins, start=start, end=start+duration)
+        print(f"Generating {args.nbins or 10} bins...")
+    # Convert time arguments (already parsed to seconds)
+    if args.t0_length > 0 or metadata.trigger_interval != 0.0:
+        offset = args.t0_offset  # seconds
+        if args.t0_length > 0:
+            metadata.trigger_interval = args.t0_length  # seconds
+        interval = args.interval if args.interval else None
+        bins = client.strobe_linbins(metadata, interval=interval, nbins=args.nbins, offset=offset)
     else:
-        bins = client.time_linbins(metadata, interval=interval, nbins=nbins)
-    request = models.SummaryTimeRequest(measurement=measurement, bins=bins, split=split)
+        bins = client.time_linbins(metadata, interval=args.interval, nbins=args.nbins)
+    request = models.SummaryTimeRequest(measurement=measurement, bins=bins, split=args.split)
 
     print("Processing events and generating Nexus output (this may take a moment)...")
     try:
@@ -681,7 +699,6 @@ def open_preview(host: str = 'localhost', port: int = 8000, filename: str = '', 
     threading.Thread(target=wait_and_open, daemon=True).start()
 
 def main():
-    import argparse
     parser = argparse.ArgumentParser(description='Event processing server and CLI utilities.')
     # Global log level for uvicorn (applies to any subcommand)
     parser.add_argument('--log-level', choices=['critical', 'error', 'warning', 'info', 'debug', 'trace'],
@@ -719,10 +736,12 @@ def main():
     parser_rebin = subparsers.add_parser('rebin', parents=[data_source_args, preview_args], help='Rebin a file directly from the CLI.')
     parser_rebin.add_argument('filename', type=str, help='Name of the nexus file (e.g., sans72222.nxs.ngv)')
     parser_rebin_bins = parser_rebin.add_mutually_exclusive_group()
-    parser_rebin_bins.add_argument('--interval', type=int, default=None, help='Bin interval.')
+    parser_rebin_bins.add_argument('--interval', type=parse_time, default=None, help='Bin interval (seconds). Supports optional units s, ms, us/μs, ns. Default unit is ms.')
     parser_rebin_bins.add_argument('--nbins', type=int, default=None, help='Number of bins (default: 10, used when neither --interval nor --nbins is given).')
-    parser_rebin.add_argument('--t0-offset', type=float, default=0.0, help='Start time relative to trigger (milliseconds).')
-    parser_rebin.add_argument('--t0-length', type=float, default=0.0, help='Binning duration after T0 (milliseconds).')
+    parser_rebin.add_argument('--start', type=parse_time, default=0.0, help='Start time relative to start (+) or end (-) of measurement: s, ms (default), us/μs, or ns.')
+    parser_rebin.add_argument('--stop', type=parse_time, default=0.0, help='Stop time relative to start (+) or end (-) of measurement: s, ms (default), us/μs, or ns.')
+    parser_rebin.add_argument('--t0-offset', type=parse_time, default=0.0, help='Start time relative to trigger: s, ms (default), us/μs, or ns.')
+    parser_rebin.add_argument('--t0-length', type=parse_time, default=0.0, help='Binning duration after T0: s, ms (default), us/μs, or ns.')
     parser_rebin.add_argument('--events-file', type=str, default=None, help='Reload cleaned events from a previously saved events+nexus file (see "save-events") instead of fetching them live.')
     parser_rebin.add_argument('--split', action='store_true', help='Write a per‑bin ZIP archive (uses nexus_zip) instead of a single rebinned file.')
 
@@ -786,16 +805,7 @@ def main():
             hst_files=args.hst_files,
             events_file=args.events_file,
         )
-        cli_rebin(
-            args.filename,
-            args.path, 
-            preview=args.preview,
-            interval=args.interval,
-            nbins=args.nbins,
-            split=args.split,
-            t0_offset=args.t0_offset,
-            t0_length=args.t0_length,
-        )
+        cli_rebin(args)
     elif args.command == "save-events":
         configure_data_source(
             cache=args.cache,

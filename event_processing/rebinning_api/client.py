@@ -46,10 +46,6 @@ def get_metadata(filename, path=None, point=0):
     # print("metadata post reply", reply)
     return models.MetadataReply.model_validate(reply)
 
-def get_triggers(metadata):
-    reply = post("triggers", request=metadata.request)
-    return reply
-
 def get_summary(metadata, bins):
     """
     bins can be by time, by time with strobe, or by device value.
@@ -106,9 +102,9 @@ def time_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask
     return bins
 
 def strobe_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
-        hysteresis=False, trigger_override=None):
+        hysteresis=False, trigger_override=None, offset=0.):
     edges = _lin_edges(metadata.trigger_interval, start, end, interval=interval, nbins=nbins)
-    bins = models.StrobeBins(edges=edges, mask=mask, hysteresis=hysteresis, triggers=trigger_override)
+    bins = models.StrobeBins(edges=edges-offset, mask=mask, hysteresis=hysteresis, triggers=trigger_override)
     return bins
 
 def sweep_linbins(metadata, start=None, end=None, nbins=100, mask=None, point=0,
@@ -146,6 +142,7 @@ def env_linbins(metadata, device, start=None, end=None, interval=None, nbins=Non
     return bins
 
 def _lin_edges(duration, start, end, interval=None, nbins=None) -> models.vector:
+    print(f"_lin_edges {duration=} {start=} {end=} {interval=} {nbins=}")
     if start is None:
         start = 0
     elif start < 0:

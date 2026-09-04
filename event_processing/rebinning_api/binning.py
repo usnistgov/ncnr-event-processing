@@ -1,12 +1,17 @@
 import logging
+
 import numpy as np
 import scipy.integrate
 from numba import njit, prange
+from uncertainties import ufloat as U
 
 from . import models
 
 # Use the logger from uvicorn so we get pretty formatting
 logger = logging.getLogger("uvicorn.error")
+
+LAST_BIN_SLUFF = 0.5
+"""Allow the last bin in a T0 measurement to be a few percent short."""
 
 def bin(entry, point, bins:models.Bins, events):
     """
@@ -252,18 +257,21 @@ def _bin_strobed(events, edges):
 
     if len(triggers) > 1:
         delta = np.diff(triggers)
-        too_short = np.sum(delta < edges[-1])
+        # Allow the last bin to be 5% too short
+        last_bin_width = edges[-1] - edges[-2]
+        too_short = np.sum(delta < edges[-2] - LAST_BIN_SLUFF*last_bin_width)
         if too_short > 0:
+            interval = U(delta.mean(), delta.std(ddof=1))/1e6
             # TODO: consider correcting number of triggers based on T0 interval and bin offset
-            counting_error = f"Count times overestimated by as much as {100*too_short/len(triggers):.1}% for later bins"
-            logger.warning(f"Triggers too close together. {counting_error}")
+            logger.warning(f"Triggers too close together: T0 interval={interval:uS} ms, histogram window={edges[-1]/1e6:.1f} ms")
         trigger_stats = dict(
             n=len(triggers),
-            min=delta.min()/1e9, 
-            max=delta.max()/1e9, 
+            min=delta.min()/1e9,
+            max=delta.max()/1e9,
             mean=delta.mean()/1e9,
             dev=delta.std(ddof=1)/1e9,
         )
+        #print(trigger_stats)
         result['trigger'] = trigger_stats
 
     detectors = events.get('detectors', {})
@@ -277,9 +285,9 @@ def _bin_strobed(events, edges):
         ts_relative = ts - triggers[trigger_index]
         #print(f"{trigger_index=} {triggers[:10]=} {ts[:10]=} {ts_relative[:10]=}")
         bin_index = np.searchsorted(edges, ts_relative)
-        data = np.zeros((nx, ny, nbins+2), 'int32')
-        np.add.at(data, (x, y, bin_index), 1)
-        binned_detectors[name] = data[:, :, 1:-1]
+        data = np.zeros((nbins+2, nx, ny), 'int32')
+        np.add.at(data, (bin_index, x, y), 1)
+        binned_detectors[name] = data[1:-1, :, :]
         #print(f"strobed {name} {dims} bins={len(edges)-1} events={len(ts):<8d} keeping={binned_detectors[name].sum():<8d}")
 
     result['detectors'] = binned_detectors
