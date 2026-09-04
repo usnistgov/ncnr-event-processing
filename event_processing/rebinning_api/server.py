@@ -69,7 +69,10 @@ app = FastAPI()
 # Mount the static files directory
 current_path = Path(__file__).parent
 static_path = current_path.parent / "rebinning_client" / "web-client" / "dist"
-app.mount("/static", StaticFiles(directory=static_path, html=True), name="frontend")
+# TODO: allow cli commands to operate without server running
+# The following condition allows us to run the cli from a branch without rebuilding the client.
+if static_path.exists():
+    app.mount("/static", StaticFiles(directory=static_path, html=True), name="frontend")
 
 
 origins = [
