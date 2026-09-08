@@ -9,17 +9,22 @@ calls so the two logs can be correlated line-for-line. log_mem is a no-op
 """
 import logging
 import os
-import resource
 
-import psutil
 
 logger = logging.getLogger("uvicorn.error")
 
-_process = psutil.Process(os.getpid())
+try:
+    import psutil
+    _process = psutil.Process(os.getpid())
+except ImportError:
+    pass
+
 _last_majflt = None
 
 
 def log_mem(label: str):
+    import resource
+
     if not logger.isEnabledFor(logging.DEBUG):
         return
 
