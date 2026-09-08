@@ -620,12 +620,11 @@ def cli_rebin(args: argparse.Namespace):
     else:
         print(f"Generating {args.nbins or 10} bins...")
     # Convert time arguments (already parsed to seconds)
-    if args.t0_length > 0 or metadata.trigger_interval != 0.0:
+    if args.t0_length > 0:
+        duration = args.t0_length
         offset = args.t0_offset  # seconds
-        if args.t0_length > 0:
-            metadata.trigger_interval = args.t0_length  # seconds
         interval = args.interval if args.interval else None
-        bins = binning.strobe_linbins(metadata, interval=interval, nbins=args.nbins, offset=offset)
+        bins = binning.strobe_linbins(duration, interval=interval, nbins=args.nbins, offset=offset)
     else:
         bins = binning.time_linbins(metadata, interval=args.interval, nbins=args.nbins)
     request = models.SummaryTimeRequest(measurement=measurement, bins=bins, split=args.split)

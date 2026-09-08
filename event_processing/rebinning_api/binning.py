@@ -32,9 +32,9 @@ def time_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask
     bins = models.TimeBins(edges=edges, mask=mask)
     return bins
 
-def strobe_linbins(metadata, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
+def strobe_linbins(duration, start=None, end=None, interval=None, nbins=None, mask=None, point=0,
         hysteresis=False, trigger_override=None, offset=0.):
-    edges = _lin_edges(metadata.trigger_interval, start, end, interval=interval, nbins=nbins)
+    edges = _lin_edges(duration, start, end, interval=interval, nbins=nbins)
     bins = models.StrobeBins(edges=edges-offset, mask=mask, hysteresis=hysteresis, triggers=trigger_override)
     return bins
 
