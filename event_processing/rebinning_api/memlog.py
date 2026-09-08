@@ -23,7 +23,11 @@ _last_majflt = None
 
 
 def log_mem(label: str):
-    import resource
+    try:
+        # linux only
+        import resource
+    except ImportError:
+        return
 
     if not logger.isEnabledFor(logging.DEBUG):
         return
