@@ -326,7 +326,7 @@ def event_cleanup(entry, raw_events, datapath=""):
 
     triggers = raw_events._fields.get("T0", None)
     if triggers:
-        cleaned_events['T0'] = triggers - raw_events.start[0]
+        cleaned_events['T0'] = np.array(triggers) - raw_events.start[0]
 
     # TODO: adjust device timestamps
 
