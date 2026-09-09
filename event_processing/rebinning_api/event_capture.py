@@ -309,7 +309,7 @@ class EventsManager:
         data["value"].append(value)
 
 
-def event_cleanup(entry, raw_events, datapath=""):
+def event_cleanup(entry, raw_events: EventsManager, datapath=""):
     """
     Translate the events from event manager into a form that can be fed to
     rebinning. That means converting pixels into detector index values,
@@ -326,7 +326,11 @@ def event_cleanup(entry, raw_events, datapath=""):
 
     triggers = raw_events._fields.get("T0", None)
     if triggers:
-        cleaned_events['T0'] = np.concat(triggers) - raw_events.start[0]
+        triggers_array = np.concat(triggers)
+        start_idx = np.searchsorted(triggers_array, raw_events.arm, side='left')
+        stop_idx = np.searchsorted(triggers_array, raw_events.disarm, side='right')
+        # print("trimming triggers", start_idx, stop_idx, len(triggers_array), raw_events.arm, raw_events.disarm, "")
+        cleaned_events['T0'] = triggers_array[start_idx:stop_idx] - raw_events.start[0]
 
     # TODO: adjust device timestamps
 
