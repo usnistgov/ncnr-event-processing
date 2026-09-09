@@ -282,8 +282,8 @@ class EventsManager:
         #   fp.write(np.asarray(self.disarm, '<i8').data)
         return
 
-    def trigger(self, timestamp):
-        self._create_or_extend_timestamp('T0', (timestamp,))
+    def trigger(self, timestamp: np.ndarray):
+        self._create_or_extend_timestamp('T0', timestamp)
 
     def device(self, name, timestamp, value):
         self._create_or_extend_pairs(name, np.array([timestamp]), np.array([value]))
@@ -298,9 +298,9 @@ class EventsManager:
     def get_detectors(self):
         return dict((k, v) for k, v in self._fields.items() if k.startswith('detector_'))
 
-    def _create_or_extend_timestamp(self, name, events):
+    def _create_or_extend_timestamp(self, name, events: np.ndarray):
         data = self._fields.setdefault(name, [])
-        data.extend(events)
+        data.append(events)
 
     def _create_or_extend_pairs(self, name, timestamp: np.ndarray, value: np.ndarray):
         #print("extend {name} pairs", events)
@@ -326,7 +326,7 @@ def event_cleanup(entry, raw_events, datapath=""):
 
     triggers = raw_events._fields.get("T0", None)
     if triggers:
-        cleaned_events['T0'] = np.array(triggers) - raw_events.start[0]
+        cleaned_events['T0'] = np.concat(triggers) - raw_events.start[0]
 
     # TODO: adjust device timestamps
 
@@ -380,7 +380,7 @@ def process_trigger(message, db: EventsManager):
     record = decoder(message)
     trigger_str, timestamp = record['syncType'], record['timestamp']
     if trigger_str == "T0":
-        db.trigger(timestamp)
+        db.trigger(np.array([timestamp]))
 
 def process_detector(message: ConsumerRecord, db: EventsManager):
     # neutron_detector-value schema id is originally 2 (default)
@@ -620,20 +620,33 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
             decoder = get_decoder(schema_id)
             record = decoder(message)
             # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
-            if record['timestamp'] < arm_time:
-                continue
-            if record['timestamp'] > disarm_time:
-                break
-            if record['syncType'] == "GATE_ON":
-                # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
-                # print("GATE_ON", message, record)
-                start_times.append(record['timestamp'])
-            elif record['syncType'] == "GATE_OFF":
-                # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
-                # print("GATE_OFF", message, record)
-                stop_times.append(record['timestamp'])
+            syncType = record['syncType']
+            if syncType in ("GATE_ON", "GATE_OFF"):
+                # single timestamp in record... schema v1 has 'timestamp': long,
+                # schema v3 has 'timestamps': [long]
+                if schema_id == 1:
+                    timestamp = record['timestamp']
+                elif schema_id == 3:
+                    timestamp = record['timestamps'][0]
+
+                if timestamp < arm_time:
+                    continue
+                if timestamp > disarm_time:
+                    break
+
+                if syncType == "GATE_ON":
+                    # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
+                    # print("GATE_ON", message, record)
+                    start_times.append(timestamp)
+                elif syncType == "GATE_OFF":
+                    # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
+                    # print("GATE_OFF", message, record)
+                    stop_times.append(timestamp)
             elif record['syncType'] == "TO_SYNC":
-                db.trigger(record['timestamp'])
+                if schema_id == 1:
+                    db.trigger(np.asarray([record['timestamp']], dtype='int64'))
+                else:
+                    db.trigger(np.asarray(record['timestamps'], dtype='int64'))
             else:
                 raise ValueError(f"Unknown trigger type {record['syncType']}")
 
