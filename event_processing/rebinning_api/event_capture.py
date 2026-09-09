@@ -326,7 +326,7 @@ def event_cleanup(entry, raw_events: EventsManager, datapath=""):
 
     triggers = raw_events._fields.get("T0", None)
     if triggers:
-        triggers_array = np.concat(triggers)
+        triggers_array = np.concatenate(triggers)
         start_idx = np.searchsorted(triggers_array, raw_events.arm, side='left')
         stop_idx = np.searchsorted(triggers_array, raw_events.disarm, side='right')
         # print("trimming triggers", start_idx, stop_idx, len(triggers_array), raw_events.arm, raw_events.disarm, "")
