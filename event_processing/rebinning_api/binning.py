@@ -354,7 +354,7 @@ def _bin_strobed(events, edges):
             mean=delta.mean()/1e9,
             dev=delta.std(ddof=1)/1e9,
         )
-        #print(trigger_stats)
+        print(trigger_stats)
         result['trigger'] = trigger_stats
 
     detectors = events.get('detectors', {})
