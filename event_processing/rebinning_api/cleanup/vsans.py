@@ -24,30 +24,46 @@ def to_detector_indices(pixel_ids: np.ndarray):
 import numpy as np
 
 
+SCALE_UNITS = {
+    "mm": 0.1,
+    "cm": 1.0,
+    "m": 0.01,
+    "": 1.0,
+    b"mm": 0.1,
+    b"cm": 1.0,
+    b"m": 0.01,
+    b"": 1.0,
+}
 def calculate_pixel_distances(nxdetector, detector_name: str, dims):
     """
     Calculates the exact sample-to-detector distance for each pixel.
-    
+
     Returns:
         pixel_distances (np.ndarray): A 2D array of distances in **centimeters (cm)** with shape (dim_x, dim_y).
     """
     dimX, dimY = dims[0], dims[1]
-    
-    # Base Z distance from sample to the center of the detector plane (in cm)
-    z = nxdetector['distance'][0]
+
+    def get_as_cm(fieldname):
+        field = nxdetector[fieldname]
+        if 'units' not in field.attrs:
+            raise ValueError(f"{nxdetector}[{fieldname}] has no 'units' attribute.")
+        scale = SCALE_UNITS[field.attrs['units']]
+        return field[0]*scale
+
+    # Base Z distance from sample to the center of the detector plane
+    z = get_as_cm('distance')
     if 'setback' in nxdetector:
-        z += nxdetector['setback'][0] # setback is also in cm
+        z += get_as_cm('setback')
 
     if detector_name.endswith("_B"):
         # Back detector special handling
-        # cal_x and cal_y are already stored in cm
-        x_pixel_size = nxdetector['cal_x'][0]
-        y_pixel_size = nxdetector['cal_y'][0]
-        
+        x_pixel_size = get_as_cm('cal_x')
+        y_pixel_size = get_as_cm('cal_y')
+
         # Beam center is calculated in cm
-        beam_center_x = x_pixel_size * nxdetector['beam_center_x'][0]
-        beam_center_y = y_pixel_size * nxdetector['beam_center_y'][0]
-        
+        beam_center_x = x_pixel_size * get_as_cm('beam_center_x')
+        beam_center_y = y_pixel_size * get_as_cm('beam_center_y')
+
         realDistX = 0.5 * x_pixel_size # cm
         realDistY = 0.5 * y_pixel_size # cm
     else:
@@ -56,51 +72,45 @@ def calculate_pixel_distances(nxdetector, detector_name: str, dims):
         if isinstance(orientation, bytes):
             orientation = orientation.decode('utf-8')
         orientation = orientation.upper()
-        
+
         # spatial_calibration coefficients (coeffs) are in millimeters (mm)
-        coeffs = nxdetector['spatial_calibration'][()]
-        
-        # beam_center_x and beam_center_y are stored natively in cm
-        beam_center_x = nxdetector['beam_center_x'][0]
-        beam_center_y = nxdetector['beam_center_y'][0]
-        
-        # panel_gap is in mm, so we divide by 10.0 to convert to cm
-        panel_gap = nxdetector['panel_gap'][0] / 10.0  
-        
+        coeffs = nxdetector['spatial_calibration'][()] / 10.0
+
+        beam_center_x = get_as_cm('beam_center_x')
+        beam_center_y = get_as_cm('beam_center_y')
+
+        panel_gap = get_as_cm('panel_gap')
+
         lateral_offset = 0.0
         vertical_offset = 0.0
-        
+
         if orientation == "VERTICAL":
-            # x_pixel_size is in mm, converted to cm
-            x_pixel_size = nxdetector['x_pixel_size'][0] / 10.0 
+            x_pixel_size = get_as_cm('x_pixel_size')
             # coeffs[1][0] acts as the y pixel size in mm, converted to cm
-            y_pixel_size = coeffs[1][0] / 10.0 
-            # lateral_offset is natively stored in cm (no conversion needed)
-            lateral_offset = nxdetector['lateral_offset'][0] 
+            y_pixel_size = coeffs[1][0]
+            lateral_offset = get_as_cm('lateral_offset')
         else:
             # coeffs[1][0] acts as the x pixel size in mm, converted to cm
-            x_pixel_size = coeffs[1][0] / 10.0
-            # y_pixel_size is in mm, converted to cm
-            y_pixel_size = nxdetector['y_pixel_size'][0] / 10.0 
-            # vertical_offset is natively stored in cm (no conversion needed)
-            vertical_offset = nxdetector['vertical_offset'][0] 
-            
+            x_pixel_size = coeffs[1][0]
+            y_pixel_size = get_as_cm('y_pixel_size')
+            vertical_offset = get_as_cm('vertical_offset')
+
         pos_key = detector_name[-1]
-        
+
         # Calculate real-space offsets based on panel position (all output variables in cm)
         # coeffs[0][0] is the spatial calibration offset in mm, so divide by 10.0 to get cm
         if pos_key == 'T':
-            realDistX = coeffs[0][0] / 10.0 
+            realDistX = coeffs[0][0]
             realDistY = 0.5 * y_pixel_size + vertical_offset + panel_gap / 2.0
         elif pos_key == 'B':
-            realDistX = coeffs[0][0] / 10.0
+            realDistX = coeffs[0][0]
             realDistY = vertical_offset - (dimY - 0.5) * y_pixel_size - panel_gap / 2.0
         elif pos_key == 'L':
             realDistX = lateral_offset - (dimX - 0.5) * x_pixel_size - panel_gap / 2.0
-            realDistY = coeffs[0][0] / 10.0
+            realDistY = coeffs[0][0]
         elif pos_key == 'R':
             realDistX = x_pixel_size * 0.5 + lateral_offset + panel_gap / 2.0
-            realDistY = coeffs[0][0] / 10.0
+            realDistY = coeffs[0][0]
         else:
             raise ValueError(f"Unknown position key {pos_key} for {detector_name}")
 
@@ -110,14 +120,14 @@ def calculate_pixel_distances(nxdetector, detector_name: str, dims):
 
     # Generate full 2D panel grid arrays
     X_grid, Y_grid = np.indices((dimX, dimY))
-    
+
     # X and Y absolute coordinate arrays for every pixel (in cm)
     X = X_grid * x_pixel_size + x0_pos
     Y = Y_grid * y_pixel_size + y0_pos
-    
+
     # Calculate total 3D hypotenuse distance for each pixel: sqrt(X^2 + Y^2 + Z^2) (in cm)
     pixel_distances = np.sqrt(X**2 + Y**2 + z**2)
-    
+
     return pixel_distances
 
 def get_detector_ending(orig_x):
