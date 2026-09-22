@@ -101,6 +101,49 @@ def parse_neutron_batch_gated_metrics(buffer: np.ndarray, gate_on: int, gate_off
     # Return the valid arrays AND the statistics
     return timestamps[:total_neutrons], pixel_ids[:total_neutrons], rejected_early, rejected_late
 
+@numba.njit((uint8_1d_readonly,), cache=True)
+def parse_sync_batch_3(buffer: np.ndarray):
+    """
+    Fast batch decoder for sync events with schema_id == 3.
+    Schema: {"syncType": Enum("GATE_ON", "GATE_OFF", "TO_SYNC"), "timestamps": array of longs}
+    """
+    max_elements = len(buffer)
+    gate_on = np.empty(max_elements, dtype=np.int64)
+    gate_off = np.empty(max_elements, dtype=np.int64)
+    to_sync = np.empty(max_elements, dtype=np.int64)
+
+    on_idx = 0
+    off_idx = 0
+    sync_idx = 0
+    cursor = 0
+
+    while cursor < len(buffer):
+        # 1. Read syncType Enum index (encoded as int)
+        sync_type, cursor = decode_avro_varint(buffer, cursor)
+
+        # 2. Read timestamps array blocks
+        while True:
+            array_count, cursor = read_avro_array_header(buffer, cursor)
+
+            # A 0 count marks the end of the Avro array
+            if array_count == 0:
+                break
+
+            for _ in range(array_count):
+                ts, cursor = decode_avro_varint(buffer, cursor)
+
+                if sync_type == 0:
+                    gate_on[on_idx] = ts
+                    on_idx += 1
+                elif sync_type == 1:
+                    gate_off[off_idx] = ts
+                    off_idx += 1
+                elif sync_type == 2:
+                    to_sync[sync_idx] = ts
+                    sync_idx += 1
+
+    return gate_on[:on_idx], gate_off[:off_idx], to_sync[:sync_idx]
+
 
 ###################
 ## HST decoders  ##

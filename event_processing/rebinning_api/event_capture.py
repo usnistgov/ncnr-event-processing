@@ -574,6 +574,7 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     # next detector bank. Instead we process each topic-partition individually
     # so we can stop when we've reached the last message for the given nexus
     # file on that detector bank.
+    from .decoders import parse_sync_batch_3
 
     if "DAS_logs/counter/eventStartTime" not in entry:
         entry_start_time = parse_timestamp(entry['start_time'])
@@ -618,21 +619,28 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
     search_stop = disarm_time // 1000000  # ns -> ms
     # TODO: need to keep track of previously retrieved offsets so we don't
     # have to search the whole stream, can put bounds (sqlite?)
-    stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=500)
+    stream = stream_history(consumer, topic, search_start, search_stop, timeout_ms=timeout_ms)
+
     for message_batch in stream:
+        # Accumulate raw bytes for THIS batch only
+        sync_buffers_schema_3 = []
+
         for message in message_batch:
             schema_id = get_schema_id(message, default=1)
+
+            if schema_id == 3:
+                buf = message.value()
+                if buf:
+                    sync_buffers_schema_3.append(buf)
+                continue
+
+            # Fallback for schema 1
             decoder = get_decoder(schema_id)
             record = decoder(message)
-            # TODO: check fenceposts. If arm=gate_on=gate_off=disarm what happens?
             syncType = record['syncType']
+
             if syncType in ("GATE_ON", "GATE_OFF"):
-                # single timestamp in record... schema v1 has 'timestamp': long,
-                # schema v3 has 'timestamps': [long]
-                if schema_id == 1:
-                    timestamp = record['timestamp']
-                elif schema_id == 3:
-                    timestamp = record['timestamps'][0]
+                timestamp = record['timestamp']
 
                 if timestamp < arm_time:
                     continue
@@ -640,20 +648,29 @@ def _fetch_events_for_point(consumer, entry, point, timeout_ms=100):
                     break
 
                 if syncType == "GATE_ON":
-                    # print(f"eventStartTime: {arm_time}, GATE ON: {record['timestamp']}, difference: { record['timestamp']-arm_time } (ns)")
-                    # print("GATE_ON", message, record)
                     start_times.append(timestamp)
                 elif syncType == "GATE_OFF":
-                    # print(f"eventStopTime: {disarm_time}, GATE OFF: {record['timestamp']}, difference: { record['timestamp']-disarm_time } (ns)")
-                    # print("GATE_OFF", message, record)
                     stop_times.append(timestamp)
-            elif record['syncType'] == "TO_SYNC":
-                if schema_id == 1:
-                    db.trigger(np.asarray([record['timestamp']], dtype='int64'))
-                else:
-                    db.trigger(np.asarray(record['timestamps'], dtype='int64'))
-            else:
-                raise ValueError(f"Unknown trigger type {record['syncType']}")
+
+            elif syncType == "TO_SYNC":
+                db.trigger(np.asarray([record['timestamp']], dtype='int64'))
+
+        # Process the aggregated schema 3 messages for the current batch
+        if sync_buffers_schema_3:
+            raw_bytes = b''.join(sync_buffers_schema_3)
+            gate_on_times, gate_off_times, to_sync_times = parse_sync_batch_3(
+                np.frombuffer(raw_bytes, dtype=np.uint8)
+            )
+
+            # Filter gate events to strictly fall within arm/disarm boundaries
+            valid_gate_on = gate_on_times[(gate_on_times >= arm_time) & (gate_on_times <= disarm_time)]
+            valid_gate_off = gate_off_times[(gate_off_times >= arm_time) & (gate_off_times <= disarm_time)]
+
+            start_times.extend(valid_gate_on.tolist())
+            stop_times.extend(valid_gate_off.tolist())
+
+            if len(to_sync_times) > 0:
+                db.trigger(to_sync_times)
 
     if len(start_times) != len(stop_times):
         warnings.warn(f"Gate mismatch: {len(start_times)} GATE_ON, {len(stop_times)} GATE_OFF found in [{arm_time}-{disarm_time}]")
