@@ -411,7 +411,9 @@ def ensure_cleaned_events(measurement: models.Measurement, entry, hst_files: lis
 
 
 def bin_events(measurement: models.Measurement, bins: models.TimeBins|models.StrobeBins, summary=False):
-    from timeit import default_timer as tic; T0 = tic()
+    from timeit import default_timer as tic
+
+    T0 = tic()
     #if bins.mode != "time":
     #    raise NotImplementedError("only time-mode binning implemented for now")
 
@@ -426,9 +428,9 @@ def bin_events(measurement: models.Measurement, bins: models.TimeBins|models.Str
         try:
             # CRUFT: we are allowing some old vsans histograms to run for demo purposes.
             # Skipped when reading events from a local cache, since that path already
-            # handles old-format vsans files via the full event_cleanup/binning pipeline.            
+            # handles old-format vsans files via the full event_cleanup/binning pipeline.
             events = ensure_cleaned_events(measurement, entry)
-            print(f"{tic()-T0:.6f}: binning")
+            print(f"{tic()-T0:.6f}: binning {measurement.filename}")
             result = binning.bin(entry, measurement.point, bins, events)
             print(f"{tic()-T0:.6f}: binned")
             #binned = _bin_by_time(entry, events, bins)
