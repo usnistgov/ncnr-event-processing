@@ -47,14 +47,16 @@ def to_detector_indices(pixel_ids: np.ndarray):
 def cleanup(entry, raw_events: "EventsManager", datapath=""):
     make_table = False
 
-    cycle = "*"
-    proposal = entry["DAS_logs/experiment/proposalId"][0]
-    filename = entry["DAS_logs/trajectoryData/fileName"][0]
+    # cycle = "*"
+    # proposal = entry["DAS_logs/experiment/proposalId"][0]
+    # filename = entry["DAS_logs/trajectoryData/fileName"][0]
     # TODO: need to associated redpanda detector number with nexus detector field
     start = raw_events.start[0]
     wavelength_calibration = entry["DAS_logs/detectorTable/wavelengths"][:]
     wavelength_spread = entry["DAS_logs/detectorTable/wavelengthSpreads"][:]
     detector_partitions = raw_events.get_detectors()
+    # Make sure wavelength is in Angstroms, not nanometers
+    assert entry["DAS_logs/detectorTable/wavelengths"].attrs["units"] == "Ang"
 
     result = {
         "dims": None,
@@ -121,7 +123,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
     monitors = raw_events._fields.get("monitors", [])
     if monitors:
         detectors['monitor'] = dict(dims=(1,1), ts=np.asarray(monitors, dtype='int64'), ts_sigma=np.zeros_like(monitors), x=np.array([0]), y=np.array([0]))
-    
+
     # combine events for all partitions (only one detector in nexus)
     if result["dims"] is not None:
         if result["ts"]:
