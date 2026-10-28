@@ -146,6 +146,9 @@ def _bin_by_time(events, edges):
     result = {}
     result['mode'] = 'time'
 
+    # Calculate and print trigger stats. Warn if the data contains triggers.
+    trigger_stats(events, window=None)
+
     #print("by time", events)
     detectors = events['detectors']
     #print("detectors", detectors)
@@ -321,6 +324,47 @@ def _numba_binning_parallel_aligned(bins, edges, ts_aligned, x_aligned, y_aligne
 # explore/histogram_backends.py.
 hist = _hist_numba
 
+def trigger_stats(events, window=None):
+    """
+    *window* is the histogram window in nanoseconds, if any.
+    """
+    triggers = events.get('T0', None)
+
+    if triggers is None or len(triggers) == 0:
+        stats = { "n": 0 }
+    elif len(triggers) == 1:
+        stats = { "n": 1 }
+    else:
+        delta = np.diff(triggers)
+        # Allow the last bin to be 5% too short
+        dt_mean, dt_std = delta.mean(), delta.std(ddof=1)
+        dt_min, dt_max = delta.min(), delta.max()
+        stats = {
+            "n": len(triggers),
+            "min": dt_min/1e9,
+            "max": dt_max/1e9,
+            "mean": dt_mean/1e9,
+            "dev": dt_std/1e9,
+            #"units": "s",
+        }
+
+        if dt_mean < 900:
+            scale, units = 1, 'ns'
+        elif dt_mean < 900_000:
+            scale, units = 1e-3, 'μs'
+        elif dt_mean < 900_000_000:
+            scale, units = 1e-6, 'ms'
+        else:
+            scale, units = 1e-9, 's'
+        period = U(dt_mean, dt_std)*scale
+        print(f"Trigger period: {period:uS} {units} ({100*dt_std/dt_mean:.2f}% variation) over {len(triggers)} triggers, ΔΤ in [{dt_min*scale:.1f}, {dt_max*scale:.1f}] {units}")
+        if not window:
+            logger.warning(f"Ignoring T0 signals in strobed measurement: n={len(triggers)} period={period:uS} {units}")
+        elif dt_min < window:
+            logger.warning(f"Triggers too close together: period={period:uS} {units}, histogram window={window*scale:.1f} {units}, ΔT min={delta.min()*scale} {units}")
+
+    return stats
+
 def _bin_strobed(events, edges):
     # TODO: does not support masking
     # TODO: use stobed with one trigger for time binning?
@@ -335,40 +379,14 @@ def _bin_strobed(events, edges):
     edges -= offset # edges is new, so we can update in place with -=
 
     triggers = events.get('T0', None)
-    if triggers is None:
+    if triggers is None or not len(triggers):
         raise ValueError("Missing T0 trigger information in datastream")
 
     # TODO: can we update data from the cache inplace?
     triggers = triggers + offset # Don't use += because triggers might be reused
 
-    if len(triggers) > 1:
-        delta = np.diff(triggers)
-        # Allow the last bin to be 5% too short
-        dt_mean, dt_std = delta.mean(), delta.std(ddof=1)
-        dt_min, dt_max = delta.min(), delta.max()
-        trigger_stats = {
-            "n": len(triggers),
-            "min": dt_min/1e9,
-            "max": dt_max/1e9,
-            "mean": dt_mean/1e9,
-            "dev": dt_std/1e9,
-            #"units": "s",
-        }
-        result['trigger'] = trigger_stats
-
-        if dt_mean < 900:
-            scale, units = 1, 'ns'
-        elif dt_mean < 900_000:
-            scale, units = 1e-3, 'μs'
-        elif dt_mean < 900_000_000:
-            scale, units = 1e-6, 'ms'
-        else:
-            scale, units = 1e-9, 's'
-        period = U(dt_mean, dt_std)*scale
-        print(f"Trigger period: {period:uS} {units} ({100*dt_std/dt_mean:.2f}% variation) over {len(triggers)} triggers, ΔΤ in [{dt_min*scale:.1f}, {dt_max*scale:.1f}] {units}")
-        if (delta < edges[-1]).any():
-            logger.warning(f"Triggers too close together: period={period:uS} {units}, histogram window={edges[-1]*scale:.1f} {units}, ΔT min={delta.min()*scale} {units}")
-        # print(trigger_stats)
+    # Calculate and print trigger stats. Warn if window is too large.
+    result["trigger"] = trigger_stats(events, window=edges[-1])
 
     detectors = events.get('detectors', {})
     binned_detectors = {}
