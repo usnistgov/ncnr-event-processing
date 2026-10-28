@@ -4,6 +4,7 @@ import typing
 
 from .util import travel_time, FWHM_to_sigma
 from ..memlog import log_mem
+
 if typing.TYPE_CHECKING:
     from ..event_capture import EventsManager, CleanedEvents
 
@@ -21,10 +22,8 @@ def to_detector_indices(pixel_ids: np.ndarray):
     x = pixel_ids & 0xFFFF
     return x, y
 
-import numpy as np
 
-
-SCALE_UNITS = {
+TO_CENTIMETERS = {
     "mm": 0.1,
     "cm": 1.0,
     "m": 0.01,
@@ -34,6 +33,10 @@ SCALE_UNITS = {
     b"m": 0.01,
     b"": 1.0,
 }
+
+def as_str(s):
+    return s.decode() if isinstance(s, bytes) else s
+
 def calculate_pixel_distances(nxdetector, detector_name: str, dims):
     """
     Calculates the exact sample-to-detector distance for each pixel.
@@ -47,7 +50,7 @@ def calculate_pixel_distances(nxdetector, detector_name: str, dims):
         field = nxdetector[fieldname]
         if 'units' not in field.attrs:
             raise ValueError(f"{nxdetector}[{fieldname}] has no 'units' attribute.")
-        scale = SCALE_UNITS[field.attrs['units']]
+        scale = TO_CENTIMETERS[field.attrs['units']]
         return field[0]*scale
 
     # Base Z distance from sample to the center of the detector plane
@@ -169,8 +172,8 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
     # TODO: caller has datapath
     cycle = "*"
-    proposal = entry["DAS_logs/experiment/proposalId"][0]
-    filename = entry["DAS_logs/trajectoryData/fileName"][0]
+    proposal = as_str(entry["DAS_logs/experiment/proposalId"][0])
+    filename = as_str(entry["DAS_logs/trajectoryData/fileName"][0])
     datapath = f"vsans/{cycle}/{proposal}/data/{filename}.nxs.ngv" if not datapath else datapath
     # TODO: need to associated redpanda detector number with nexus detector field
     start = raw_events.start[0]
@@ -242,7 +245,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
 
         distance = nxdetector["distance"][0] # cm
         distance_table = calculate_pixel_distances(nxdetector, detector_name, dims)
-        
+
         logger.debug(f"detector {detector_name} distance: {distance}")
         logger.debug(f"distance table: min={distance_table.min()} max={distance_table.max()}")
 
@@ -354,7 +357,7 @@ def cleanup(entry, raw_events: "EventsManager", datapath=""):
             bits_to_shave = max(0, sigma_bits - EXTRA_BITS)
             if bits_to_shave > 0:
                 logger.debug(f"Shaving {bits_to_shave} bits from ts_sigma, because minimum is {ts_sigma_stats['min']}")
-            
+
                 # 3. Bit Shave: Shift right to drop the lowest bits, then left to restore magnitude
                 # Example: 101101 >> 3 = 101; 101 << 3 = 101000
                 times = (times >> bits_to_shave) << bits_to_shave
