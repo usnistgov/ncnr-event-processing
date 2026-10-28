@@ -17,12 +17,6 @@ def extra_detector_distance(x: int | np.ndarray, y: int | np.ndarray):
     # TODO: add actual pixel-by-pixel additional distance?
     return 0.0
 
-def to_detector_indices(pixel_ids: np.ndarray):
-    y = pixel_ids >> 16
-    x = pixel_ids & 0xFFFF
-    return x, y
-
-
 TO_CENTIMETERS = {
     "mm": 0.1,
     "cm": 1.0,
@@ -71,9 +65,7 @@ def calculate_pixel_distances(nxdetector, detector_name: str, dims):
         realDistY = 0.5 * y_pixel_size # cm
     else:
         # Front/Middle detectors (L, R, T, B panels)
-        orientation = nxdetector['tube_orientation'][0]
-        if isinstance(orientation, bytes):
-            orientation = orientation.decode('utf-8')
+        orientation = as_str(nxdetector['tube_orientation'][0])
         orientation = orientation.upper()
 
         # spatial_calibration coefficients (coeffs) are in millimeters (mm)
