@@ -799,7 +799,7 @@ def main():
             open_preview(host=args.host, port=args.port, filename=args.filename, path=args.path)
 
         # Start the server in a busy loop. This never returns.
-        print(f"Starting API and Web server on http://{args.host}:{args.port} ...")
+        print(f"Starting API and Web server on http://{args.host}:{args.port}/static ...")
         uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 
     elif args.command == "clear":
