@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import scipy.integrate
 from numba import njit, prange
-from uncertainties import ufloat as U
+from uncertainties import ufloat as U # For formatting values with uncertainties
 
 from . import models
 
@@ -329,7 +329,8 @@ def _bin_strobed(events, edges):
     result = {}
     result['mode'] = 'strobe'
 
-    # Shift the T0 to an arbitrary phase point
+    # Shift the T0 to an arbitrary phase point. If the first edge is
+    # negative, this will include the events before the T0 trigger.
     offset = edges[0]
     edges -= offset # edges is new, so we can update in place with -=
 
@@ -343,19 +344,31 @@ def _bin_strobed(events, edges):
     if len(triggers) > 1:
         delta = np.diff(triggers)
         # Allow the last bin to be 5% too short
-        if (delta < edges[-2]).any():
-            interval = U(delta.mean(), delta.std(ddof=1))/1e6
-            # TODO: consider correcting number of triggers based on T0 interval and bin offset
-            logger.warning(f"Triggers too close together: T0 interval={interval:uS} ms, histogram window={edges[-1]/1e6:.1f} ms")
-        trigger_stats = dict(
-            n=len(triggers),
-            min=delta.min()/1e9,
-            max=delta.max()/1e9,
-            mean=delta.mean()/1e9,
-            dev=delta.std(ddof=1)/1e9,
-        )
-        print(trigger_stats)
+        dt_mean, dt_std = delta.mean(), delta.std(ddof=1)
+        dt_min, dt_max = delta.min(), delta.max()
+        trigger_stats = {
+            "n": len(triggers),
+            "min": dt_min/1e9,
+            "max": dt_max/1e9,
+            "mean": dt_mean/1e9,
+            "dev": dt_std/1e9,
+            #"units": "s",
+        }
         result['trigger'] = trigger_stats
+
+        if dt_mean < 900:
+            scale, units = 1, 'ns'
+        elif dt_mean < 900_000:
+            scale, units = 1e-3, 'μs'
+        elif dt_mean < 900_000_000:
+            scale, units = 1e-6, 'ms'
+        else:
+            scale, units = 1e-9, 's'
+        period = U(dt_mean, dt_std)*scale
+        print(f"Trigger period: {period:uS} {units} ({100*dt_std/dt_mean:.2f}% variation) over {len(triggers)} triggers, ΔΤ in [{dt_min*scale:.1f}, {dt_max*scale:.1f}] {units}")
+        if (delta < edges[-1]).any():
+            logger.warning(f"Triggers too close together: period={period:uS} {units}, histogram window={edges[-1]*scale:.1f} {units}, ΔT min={delta.min()*scale} {units}")
+        # print(trigger_stats)
 
     detectors = events.get('detectors', {})
     binned_detectors = {}
@@ -364,7 +377,7 @@ def _bin_strobed(events, edges):
         #print(f"binning {name} {dims} events={len(ts)} bins={len(edges)-1}")
         nx, ny = dims
         # Use triggers[1:] because searchsorted returns the prior interval.
-        trigger_index = np.searchsorted(triggers[1:], ts) 
+        trigger_index = np.searchsorted(triggers[1:], ts)
         ts_relative = ts - triggers[trigger_index]
         #print(f"{trigger_index=} {triggers[:10]=} {ts[:10]=} {ts_relative[:10]=}")
         bin_index = np.searchsorted(edges, ts_relative)
