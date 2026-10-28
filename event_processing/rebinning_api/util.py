@@ -1,7 +1,7 @@
 INSTRUMENTS = {
     'NG3-VSANS': 'vsans',
     'NCNR Candor': 'candor',
-    'SANS:NGB30': 'ngb30msans',
+    'SANS:NGB30': 'ngb30sans',
     'SANS:NG7': 'ng7sans',
     'SANS:NGB': '10msans',
     '10m Sans': '10msans',
