@@ -409,6 +409,23 @@ def ensure_cleaned_events(measurement: models.Measurement, entry, hst_files: lis
     print(f"{tic()-T0:.6f}: cached events to disk")
     return events
 
+def get_description(entry):
+    """
+    Get the entry description from the trajectory data.
+    """
+    trajectoryData = entry["DAS_logs/trajectoryData"]
+    # VSANS uses the description field for the configuration map value.
+    # The stateDescription field is a better description.
+    if "stateDescription" in trajectoryData:
+        description = trajectoryData["stateDescription"][0]
+    elif "description" in trajectoryData:
+        description = trajectoryData["description"][0]
+    else:
+        description = ""
+    if isinstance(description, bytes):
+        description = description.decode('utf-8')
+    return description
+
 
 def bin_events(measurement: models.Measurement, bins: models.TimeBins|models.StrobeBins, summary=False):
     from timeit import default_timer as tic
@@ -430,7 +447,7 @@ def bin_events(measurement: models.Measurement, bins: models.TimeBins|models.Str
             # Skipped when reading events from a local cache, since that path already
             # handles old-format vsans files via the full event_cleanup/binning pipeline.
             events = ensure_cleaned_events(measurement, entry)
-            print(f"{tic()-T0:.6f}: binning {measurement.filename}")
+            print(f"{tic()-T0:.6f}: binning {measurement.filename} [{get_description(entry)}]")
             result = binning.bin(entry, measurement.point, bins, events)
             print(f"{tic()-T0:.6f}: binned")
             #binned = _bin_by_time(entry, events, bins)
