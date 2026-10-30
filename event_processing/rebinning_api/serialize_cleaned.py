@@ -51,7 +51,7 @@ def write_cleaned_events(group: "h5py.Group", cleaned_fields: dict, meta: dict |
 
         elif key in ('monitor', 'TO_SYNC', 'T0'):
             sub_group = group.create_group(key)
-            if data is not None:
+            if data is not None and len(data) > 0:
                 # Unpack list of (timestamp,) tuples
                 ts = data if np.isscalar(data[0]) else [d[0] for d in data]
                 sub_group.create_dataset('timestamp', data=np.array(ts, dtype='int64'), scaleoffset=0, compression='gzip')
