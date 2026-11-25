@@ -117,10 +117,17 @@ def bin(entry, point, bins:models.Bins, events):
 
     # Convert detectors from area to linear or point as necessary
     result['detectors'] = _squeeze_detectors(result['detectors'])
-    # Extract monitor into a separate reult
+
+    # Extract monitor into a separate result
+    # If the monitor isn't emitting events we instead divvy the total monitor
+    # by the relative count time for each bin.
     monitor = result['detectors'].pop('monitor', None)
     if monitor is not None:
         result['monitor'] = monitor
+    else:
+        total_monitors = entry["control/monitor_counts"][point]
+        total_counts = entry["control/count_time"][point]
+        result['monitor'] = total_monitors * result['count_time']/total_counts
 
     return result
 

@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 import h5py
+import numpy as np
 from numpy.typing import NDArray
 
 from . import models
@@ -55,23 +56,44 @@ def nexus_dup(
 
     The split format is twice as big and takes several times longer to write.
     """
+
+    replacement: dict[str, NDArray] = {}
+
+    # TODO: do we want to divvy presets according to time?
+    # TODO: test with a scanned entry
     # Search each detector group for the DASlogs link containing the counts.
-    # Record replacement = {link: data}, but only if there are binned events for the detector.
+    # Record replacement = {link: data}, but only if there are binned events
+    # for the detector. Compute replacement liveROI by applying mask to the frames.
     detector_links = nexus_detector_replacement(entry)
     detectors = binned['detectors']
-    replacement = {
-        link: detectors[name] for name, link in detector_links.items()
-        if name in detectors  # ... only if the detector event data is available
-    }
+    for name, link in detector_links.items():
+        # Make sure the detector is active
+        data = detectors.get(name)
+        if data is None:
+            continue
+        # Update the data
+        replacement[link] = data
 
-    # count_time – either full vector if no bin number or scalar for a single bin
+        # Use the link to find the parent detector group in DAS_logs.
+        # Link is an absolute path so this works from any group.
+        das_path = link.rsplit('/', 1)[0]
+        # print(f"{link=} {das_path=}")
+
+        # Fetch the mask and apply it to the data, computing the per-frame ROI sum
+        mask = np.asarray(entry[f"{das_path}/roiMask"][()], dtype='bool')
+        # print("liveROI", name, das_path, mask.shape, data.shape)
+        liveROI = data[:, mask].sum(axis=1)
+        #print(f"roi {data.shape=} {data[:,mask].shape=} {mask.shape=}, {liveROI.shape=}")
+        replacement[f"{das_path}/liveROI"] = liveROI
+
+    # Control fields: count_time, monitor_counts, detector_counts
     field = entry["control/count_time"]
     replacement[field.attrs["target"]] = binned['count_time']
-
-    # optional monitor_counts – same logic as count_time
-    if 'monitors' in binned:
-        field = entry["control/monitor_counts"]
-        replacement[field.attrs["target"]] = binned['monitors']
+    field = entry["control/monitor_counts"]
+    replacement[field.attrs["target"]] = binned['monitor']
+    # detector_counts is handled above (computing the liveROI for each detector frame)
+    # and below (replacing control/detector_counts and counter/liveROI
+    # with a link to the detector liveROI).
 
     # TODO: need to average temperature per frame, etc., from binned['devices']
 
@@ -91,6 +113,11 @@ def nexus_dup(
             h5out.attrs[name] = value
         # print(f"{entry.name} copied to {h5out}")
         record_bin_edges(h5out[entry.name], bins)
+
+        # TODO: update nice nexus writer so liveROI links to the detector.
+        # liveROI in DAS_logs/counter is a copy of that in the underlying detector.
+        # Turn it into a link, and update the link from control/detector_counts.
+        _link_to_liveROI(h5out[entry.name])
 
         if split:
             # Make a field for the bin number of the current frame
@@ -181,6 +208,14 @@ def nexus_detector_replacement(entry):
     }
     #print("detectors", detectors)
     return detectors
+
+def _link_to_liveROI(entry: h5py.Group):
+    primary = entry["DAS_logs/counter/primaryDetector"][0].decode()
+    liveROI = f"DAS_logs/{primary}/liveROI"
+    for path in ("control/detector_counts", "DAS_logs/counter/liveROI"):
+        # print(f"update {path} in {entry.name} with {liveROI}")
+        del entry[path]
+        entry[path] = entry[liveROI]
 
 # TODO: optimize hdf copy, currently takes > 3 sec for test
 # can get a list of all existing links with these functions:
